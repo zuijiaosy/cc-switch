@@ -331,7 +331,6 @@ jobs:
     name: Assemble latest.json
     runs-on: ubuntu-22.04
     needs: release
-    if: secrets.TAURI_SIGNING_PRIVATE_KEY != ''
     permissions:
       contents: write
     steps:
@@ -355,6 +354,18 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+
+          # 检查是否有签名文件
+          shopt -s nullglob
+          sig_files=(dl/*.sig)
+          if [ ${#sig_files[@]} -eq 0 ]; then
+            echo "⚠️ 未找到签名文件，跳过 latest.json 生成"
+            echo "ℹ️ latest.json 仅在启用签名时需要用于自动更新功能"
+            exit 0
+          fi
+
+          echo "✅ 找到 ${#sig_files[@]} 个签名文件，开始生成 latest.json"
+
           VERSION="${TAG#v}"
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           base_url="https://github.com/$REPO/releases/download/$TAG"
@@ -362,7 +373,6 @@ jobs:
           mac_url=""; mac_sig=""
           win_url=""; win_sig=""
           linux_url=""; linux_sig=""
-          shopt -s nullglob
           for sig in dl/*.sig; do
             base=${sig%.sig}
             fname=$(basename "$base")
@@ -415,4 +425,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euxo pipefail
-          gh release upload "$GITHUB_REF_NAME" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+          if [ -f latest.json ]; then
+            gh release upload "$GITHUB_REF_NAME" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+            echo "✅ latest.json 已上传"
+          else
+            echo "⚠️ latest.json 不存在，跳过上传"
+          fi
