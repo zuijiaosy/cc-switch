@@ -218,15 +218,16 @@ export function SettingsPage({
           onValueChange={setActiveTab}
           className="flex flex-col h-full"
         >
-          <TabsList className="grid w-full grid-cols-4 mb-6 glass rounded-lg">
+          <TabsList className="grid w-full grid-cols-2 mb-6 glass rounded-lg">
             <TabsTrigger value="general">
               {t("settings.tabGeneral")}
             </TabsTrigger>
             <TabsTrigger value="advanced">
               {t("settings.tabAdvanced")}
             </TabsTrigger>
-            <TabsTrigger value="usage">{t("usage.title")}</TabsTrigger>
-            <TabsTrigger value="about">{t("common.about")}</TabsTrigger>
+            {/* 按需求：设置页不显示“使用统计 / 关于”两个菜单入口（不删除对应页面代码） */}
+            {/* <TabsTrigger value="usage">{t("usage.title")}</TabsTrigger> */}
+            {/* <TabsTrigger value="about">{t("common.about")}</TabsTrigger> */}
           </TabsList>
 
           <div className="flex-1 min-h-0 flex flex-col">
