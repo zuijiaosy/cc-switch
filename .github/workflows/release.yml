@@ -96,11 +96,11 @@ jobs:
         run: |
           # 调试：检查 Secret 是否存在
           if [ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
-            echo "❌ TAURI_SIGNING_PRIVATE_KEY Secret 为空或不存在" >&2
-            echo "请检查 GitHub 仓库 Settings > Secrets and variables > Actions" >&2
-            exit 1
+            echo "⚠️ TAURI_SIGNING_PRIVATE_KEY Secret 未设置，跳过签名步骤"
+            echo "ℹ️ 如需启用自动更新功能，请在 GitHub 仓库设置中添加签名密钥"
+            exit 0
           fi
-          
+
           RAW="${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
           # 目标：提供正确的私钥“文件路径”给 Tauri CLI，避免内容解码歧义
           KEY_PATH="$RUNNER_TEMP/tauri_signing.key"
@@ -331,6 +331,7 @@ jobs:
     name: Assemble latest.json
     runs-on: ubuntu-22.04
     needs: release
+    if: secrets.TAURI_SIGNING_PRIVATE_KEY != ''
     permissions:
       contents: write
     steps:
