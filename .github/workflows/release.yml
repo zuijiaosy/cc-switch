@@ -102,43 +102,32 @@ jobs:
           fi
 
           RAW="${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
-          # 目标：提供正确的私钥“文件路径”给 Tauri CLI，避免内容解码歧义
-          KEY_PATH="$RUNNER_TEMP/tauri_signing.key"
-          # 情况 1：原始两行文本（第一行以 "untrusted comment:" 开头）
-          if echo "$RAW" | head -n1 | grep -q '^untrusted comment:'; then
-            printf '%s\n' "$RAW" > "$KEY_PATH"
-            echo "✅ 使用原始两行密钥文件格式"
+          # 目标：兼容 3 种常见格式，最终提取出“第二行 Base64 私钥”作为环境变量：
+          # 1) 两行原文：untrusted comment:... + Base64
+          # 2) 上述两行内容整体被 base64 包裹（先解码，再取第二行）
+          # 3) 直接就是第二行 Base64（一行）
+          KEY_B64=""
+          if printf '%s\n' "$RAW" | head -n1 | grep -q '^untrusted comment:'; then
+            KEY_B64=$(printf '%s\n' "$RAW" | sed -n '2p' | tr -d '\r\n')
+            echo "✅ 识别为两行原文格式，已提取第二行 Base64 私钥"
           else
-            # 情况 2：整体被 base64 包裹（解包后应当是两行）
             if DECODED=$(printf '%s' "$RAW" | (base64 --decode 2>/dev/null || base64 -D 2>/dev/null)) \
-               && echo "$DECODED" | head -n1 | grep -q '^untrusted comment:'; then
-              printf '%s\n' "$DECODED" > "$KEY_PATH"
-              echo "✅ 成功解码 base64 包裹密钥，已还原为两行文件"
+               && printf '%s\n' "$DECODED" | head -n1 | grep -q '^untrusted comment:'; then
+              KEY_B64=$(printf '%s\n' "$DECODED" | sed -n '2p' | tr -d '\r\n')
+              echo "✅ 识别为 base64 包裹的两行密钥，解码后已提取第二行 Base64 私钥"
             else
-              # 情况 3：已是第二行（纯 Base64 一行）→ 构造两行文件
-              if echo "$RAW" | grep -Eq '^[A-Za-z0-9+/=]+$'; then
-                ONE=$(printf '%s' "$RAW" | tr -d '\r\n')
-                printf '%s\n%s\n' "untrusted comment: tauri signing key" "$ONE" > "$KEY_PATH"
-                echo "✅ 使用一行 Base64 私钥，已构造两行文件"
+              if printf '%s' "$RAW" | grep -Eq '^[A-Za-z0-9+/=]+$'; then
+                KEY_B64=$(printf '%s' "$RAW" | tr -d '\r\n')
+                echo "✅ 识别为一行 Base64 私钥"
               else
                 echo "❌ TAURI_SIGNING_PRIVATE_KEY 格式无法识别：既不是两行原文，也不是其 base64，亦非一行 base64" >&2
-                echo "密钥前10个字符: $(echo "$RAW" | head -c 10)..." >&2
+                echo "密钥前10个字符: $(printf '%s' "$RAW" | head -c 10)..." >&2
                 exit 1
               fi
             fi
           fi
-          # 将“完整两行内容”作为环境变量注入（Tauri 支持传入完整私钥文本或文件路径）
-          # 使用多行写入语法，保持换行以便解析
-          # 将完整两行私钥内容进行 base64 编码，作为单行内容注入环境变量
-          if command -v base64 >/dev/null 2>&1; then
-            KEY_B64=$(base64 < "$KEY_PATH" | tr -d '\r\n')
-          elif command -v openssl >/dev/null 2>&1; then
-            KEY_B64=$(openssl base64 -A -in "$KEY_PATH")
-          else
-            KEY_B64=$(KEY_PATH="$KEY_PATH" node -e "process.stdout.write(require('fs').readFileSync(process.env.KEY_PATH).toString('base64'))")
-          fi
           if [ -z "$KEY_B64" ]; then
-            echo "❌ 无法生成私钥 base64 内容" >&2
+            echo "❌ 提取 Base64 私钥失败（为空）" >&2
             exit 1
           fi
           echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_B64" >> "$GITHUB_ENV"
@@ -178,15 +167,17 @@ jobs:
               [ -z "$APP_PATH" ] && APP_PATH=$(find "$path" -maxdepth 1 -name "*.app" -type d | head -1 || true)
             fi
           done
-          if [ -z "$TAR_GZ" ]; then
-            echo "No macOS .tar.gz updater artifact found" >&2
-            exit 1
+          if [ -n "$TAR_GZ" ]; then
+            # 重命名 tar.gz 为统一格式
+            NEW_TAR_GZ="CC-Switch-${VERSION}-macOS.tar.gz"
+            cp "$TAR_GZ" "release-assets/$NEW_TAR_GZ"
+            [ -f "$TAR_GZ.sig" ] && cp "$TAR_GZ.sig" "release-assets/$NEW_TAR_GZ.sig" || echo ".sig for macOS not found yet"
+            echo "macOS updater artifact copied: $NEW_TAR_GZ"
+          else
+            # 注意：当前 src-tauri/tauri.conf.json 中 bundle.createUpdaterArtifacts=false，
+            # 因此默认不会生成 .tar.gz updater artifact。这里改为“可选”，避免发布流程整体失败。
+            echo "⚠️ 未找到 macOS .tar.gz updater artifact（可选），将仅上传 .zip（如生成）" >&2
           fi
-          # 重命名 tar.gz 为统一格式
-          NEW_TAR_GZ="CC-Switch-${VERSION}-macOS.tar.gz"
-          cp "$TAR_GZ" "release-assets/$NEW_TAR_GZ"
-          [ -f "$TAR_GZ.sig" ] && cp "$TAR_GZ.sig" "release-assets/$NEW_TAR_GZ.sig" || echo ".sig for macOS not found yet"
-          echo "macOS updater artifact copied: $NEW_TAR_GZ"
           if [ -n "$APP_PATH" ]; then
             APP_DIR=$(dirname "$APP_PATH"); APP_NAME=$(basename "$APP_PATH")
             NEW_ZIP="CC-Switch-${VERSION}-macOS.zip"
@@ -196,6 +187,11 @@ jobs:
             echo "macOS zip ready: $NEW_ZIP"
           else
             echo "No .app found to zip (optional)" >&2
+          fi
+          # 两者都没找到才视为失败（避免“构建没产物”却默默发布空包）
+          if [ -z "$TAR_GZ" ] && [ -z "$APP_PATH" ]; then
+            echo "❌ 未找到任何 macOS 产物（.tar.gz / .app），请检查 Tauri 构建输出目录" >&2
+            exit 1
           fi
 
       - name: Prepare Windows Assets
@@ -310,7 +306,7 @@ jobs:
 
             ### 下载
 
-            - **macOS**: `CC-Switch-${{ github.ref_name }}-macOS.zip`（解压即用）或 `CC-Switch-${{ github.ref_name }}-macOS.tar.gz`（Homebrew）
+            - **macOS**: `CC-Switch-${{ github.ref_name }}-macOS.zip`（解压即用；若启用 Updater/签名，则可能额外提供 `CC-Switch-${{ github.ref_name }}-macOS.tar.gz`）
             - **Windows**: `CC-Switch-${{ github.ref_name }}-Windows.msi`（安装版）或 `CC-Switch-${{ github.ref_name }}-Windows-Portable.zip`（绿色版）
             - **Linux**: `CC-Switch-${{ github.ref_name }}-Linux.AppImage`（AppImage）或 `CC-Switch-${{ github.ref_name }}-Linux.deb`（Debian/Ubuntu）或 `CC-Switch-${{ github.ref_name }}-Linux.rpm`（Fedora/RHEL/openSUSE）
 
