@@ -67,14 +67,43 @@ import {
 } from "./hooks";
 import { useProvidersQuery } from "@/lib/query/queries";
 
-const CLAUDE_DEFAULT_CONFIG = JSON.stringify({ env: {} }, null, 2);
-const CODEX_DEFAULT_CONFIG = JSON.stringify({ auth: {}, config: "" }, null, 2);
+// 新建供应商时的默认展示值：按用户需求预填一个可用的聚合地址
+const DEFAULT_PROVIDER_NAME = "ai-hub-api";
+
+const CLAUDE_DEFAULT_CONFIG = JSON.stringify(
+  {
+    env: {
+      ANTHROPIC_BASE_URL: "https://api.xbai.top",
+      ANTHROPIC_AUTH_TOKEN: "",
+    },
+  },
+  null,
+  2,
+);
+
+const CODEX_DEFAULT_CONFIG = JSON.stringify(
+  {
+    auth: { OPENAI_API_KEY: "" },
+    config: `model_provider = "ai_hub_api"
+model = "gpt-5.1-codex"
+model_reasoning_effort = "high"
+disable_response_storage = true
+
+[model_providers.ai_hub_api]
+name = "ai_hub_api"
+base_url = "https://api.xbai.top/v1"
+wire_api = "responses"
+requires_openai_auth = true`,
+  },
+  null,
+  2,
+);
 const GEMINI_DEFAULT_CONFIG = JSON.stringify(
   {
     env: {
-      GOOGLE_GEMINI_BASE_URL: "",
+      GOOGLE_GEMINI_BASE_URL: "https://api.xbai.top",
       GEMINI_API_KEY: "",
-      GEMINI_MODEL: "gemini-3-pro-preview",
+      GEMINI_MODEL: "gemini-3-pro",
     },
   },
   null,
@@ -85,7 +114,7 @@ const OPENCODE_DEFAULT_CONFIG = JSON.stringify(
   {
     npm: "@ai-sdk/openai-compatible",
     options: {
-      baseURL: "",
+      baseURL: "https://api.xbai.top/v1",
       apiKey: "",
     },
     models: {},
@@ -220,7 +249,7 @@ export function ProviderForm({
 
   const defaultValues: ProviderFormData = useMemo(
     () => ({
-      name: initialData?.name ?? "",
+      name: initialData?.name ?? (isEditMode ? "" : DEFAULT_PROVIDER_NAME),
       websiteUrl: initialData?.websiteUrl ?? "",
       notes: initialData?.notes ?? "",
       settingsConfig: initialData?.settingsConfig
@@ -235,7 +264,7 @@ export function ProviderForm({
       icon: initialData?.icon ?? "",
       iconColor: initialData?.iconColor ?? "",
     }),
-    [initialData, appId],
+    [initialData, appId, isEditMode],
   );
 
   const form = useForm<ProviderFormData>({
@@ -562,7 +591,7 @@ export function ProviderForm({
   const [opencodeProviderKey, setOpencodeProviderKey] = useState<string>(() => {
     if (appId !== "opencode") return "";
     // In edit mode, use the existing provider ID as the key
-    return providerId || "";
+    return providerId || DEFAULT_PROVIDER_NAME;
   });
 
   // OpenCode 配置状态

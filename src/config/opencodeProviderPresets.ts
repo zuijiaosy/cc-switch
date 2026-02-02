@@ -43,6 +43,33 @@ export const opencodeNpmPackages = [
  */
 export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
   {
+    name: "ai-hub-api",
+    websiteUrl: "https://xbai.top",
+    settingsConfig: {
+      npm: "@ai-sdk/openai-compatible",
+      options: {
+        baseURL: "https://api.xbai.top/v1",
+        apiKey: "",
+      },
+      models: {},
+    },
+    category: "aggregator",
+    templateValues: {
+      apiKey: {
+        label: "API Key",
+        placeholder: "sk-...",
+        editorValue: "",
+      },
+    },
+    theme: {
+      icon: "codex",
+      backgroundColor: "#111827",
+      textColor: "#FFFFFF",
+    },
+    icon: "openai",
+    iconColor: "#00A67E",
+  },
+  {
     name: "CodexZh",
     websiteUrl: "https://codexzh.com",
     settingsConfig: {
@@ -71,4 +98,3 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
     iconColor: "#00A67E",
   },
 ];
-

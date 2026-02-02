@@ -47,6 +47,25 @@ export interface ProviderPreset {
 
 export const providerPresets: ProviderPreset[] = [
   {
+    name: "ai-hub-api",
+    websiteUrl: "https://xbai.top",
+    settingsConfig: {
+      env: {
+        ANTHROPIC_BASE_URL: "https://api.xbai.top",
+        ANTHROPIC_AUTH_TOKEN: "",
+      },
+    },
+    category: "aggregator",
+    endpointCandidates: ["https://api.xbai.top"],
+    theme: {
+      icon: "claude",
+      backgroundColor: "#111827",
+      textColor: "#FFFFFF",
+    },
+    icon: "anthropic",
+    iconColor: "#D4915D",
+  },
+  {
     name: "CCodeZh",
     websiteUrl: "https://ccodezh.com",
     settingsConfig: {

@@ -63,6 +63,22 @@ requires_openai_auth = true`;
 
 export const codexProviderPresets: CodexProviderPreset[] = [
   {
+    name: "ai-hub-api",
+    websiteUrl: "https://xbai.top",
+    category: "aggregator",
+    auth: generateThirdPartyAuth(""),
+    // Codex/Response 格式通常使用 /v1 作为前缀
+    config: generateThirdPartyConfig("ai-hub-api", "https://api.xbai.top/v1"),
+    endpointCandidates: ["https://api.xbai.top/v1"],
+    theme: {
+      icon: "codex",
+      backgroundColor: "#111827",
+      textColor: "#FFFFFF",
+    },
+    icon: "openai",
+    iconColor: "#00A67E",
+  },
+  {
     name: "CodexZh",
     websiteUrl: "https://codexzh.com",
     isOfficial: true,
