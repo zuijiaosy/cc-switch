@@ -65,7 +65,7 @@ export const geminiProviderPresets: GeminiProviderPreset[] = [
     baseURL: "https://api.xbai.top",
     model: "gemini-3-pro",
     description: "XBai Gemini API",
-    category: "official",
+    category: "cn_official",
     endpointCandidates: ["https://api.xbai.top"],
     theme: {
       icon: "gemini",

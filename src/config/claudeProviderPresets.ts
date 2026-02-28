@@ -75,7 +75,7 @@ export const providerPresets: ProviderPreset[] = [
       },
     },
     isOfficial: true,
-    category: "official",
+    category: "cn_official",
     endpointCandidates: ["https://api.ccodezh.com"],
     theme: {
       icon: "claude",

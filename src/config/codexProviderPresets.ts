@@ -82,7 +82,7 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     name: "CodexZh",
     websiteUrl: "https://codexzh.com",
     isOfficial: true,
-    category: "official",
+    category: "cn_official",
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig("codexzh", "https://api.codexzh.com"),
     endpointCandidates: ["https://api.codexzh.com"],
