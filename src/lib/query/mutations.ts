@@ -2,9 +2,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { providersApi, settingsApi, type AppId } from "@/lib/api";
+import type { SwitchResult } from "@/lib/api/providers";
 import type { Provider, Settings } from "@/types";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { generateUUID } from "@/utils/uuid";
+import { openclawKeys } from "@/hooks/useOpenClaw";
 
 export const useAddProviderMutation = (appId: AppId) => {
   const queryClient = useQueryClient();
@@ -16,23 +18,30 @@ export const useAddProviderMutation = (appId: AppId) => {
     ) => {
       let id: string;
 
-      if (appId === "opencode") {
-        // OpenCode: use user-provided providerKey as ID
-        if (!providerInput.providerKey) {
-          throw new Error("Provider key is required for OpenCode");
+      if (appId === "opencode" || appId === "openclaw") {
+        if (
+          providerInput.category === "omo" ||
+          providerInput.category === "omo-slim"
+        ) {
+          const prefix = providerInput.category === "omo" ? "omo" : "omo-slim";
+          id = `${prefix}-${generateUUID()}`;
+        } else {
+          if (!providerInput.providerKey) {
+            throw new Error(`Provider key is required for ${appId}`);
+          }
+          id = providerInput.providerKey;
         }
-        id = providerInput.providerKey;
       } else {
-        // Other apps: use random UUID
         id = generateUUID();
       }
 
+      const { providerKey: _providerKey, ...rest } = providerInput;
+
       const newProvider: Provider = {
-        ...providerInput,
+        ...rest,
         id,
         createdAt: Date.now(),
       };
-      // Remove providerKey from the provider object before saving
       delete (newProvider as any).providerKey;
 
       await providersApi.add(newProvider, appId);
@@ -41,7 +50,21 @@ export const useAddProviderMutation = (appId: AppId) => {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
 
-      // 更新托盘菜单（失败不影响主操作）
+      if (appId === "opencode") {
+        await queryClient.invalidateQueries({
+          queryKey: ["omo", "current-provider-id"],
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ["omo", "provider-count"],
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ["omo-slim", "current-provider-id"],
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ["omo-slim", "provider-count"],
+        });
+      }
+
       try {
         await providersApi.updateTrayMenu();
       } catch (trayError) {
@@ -61,10 +84,11 @@ export const useAddProviderMutation = (appId: AppId) => {
       );
     },
     onError: (error: Error) => {
+      const detail = extractErrorMessage(error) || t("common.unknown");
       toast.error(
         t("notifications.addFailed", {
           defaultValue: "添加供应商失败: {{error}}",
-          error: error.message,
+          error: detail,
         }),
       );
     },
@@ -92,10 +116,11 @@ export const useUpdateProviderMutation = (appId: AppId) => {
       );
     },
     onError: (error: Error) => {
+      const detail = extractErrorMessage(error) || t("common.unknown");
       toast.error(
         t("notifications.updateFailed", {
           defaultValue: "更新供应商失败: {{error}}",
-          error: error.message,
+          error: detail,
         }),
       );
     },
@@ -113,7 +138,21 @@ export const useDeleteProviderMutation = (appId: AppId) => {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
 
-      // 更新托盘菜单（失败不影响主操作）
+      if (appId === "opencode") {
+        await queryClient.invalidateQueries({
+          queryKey: ["omo", "current-provider-id"],
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ["omo", "provider-count"],
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ["omo-slim", "current-provider-id"],
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ["omo-slim", "provider-count"],
+        });
+      }
+
       try {
         await providersApi.updateTrayMenu();
       } catch (trayError) {
@@ -133,10 +172,11 @@ export const useDeleteProviderMutation = (appId: AppId) => {
       );
     },
     onError: (error: Error) => {
+      const detail = extractErrorMessage(error) || t("common.unknown");
       toast.error(
         t("notifications.deleteFailed", {
           defaultValue: "删除供应商失败: {{error}}",
-          error: error.message,
+          error: detail,
         }),
       );
     },
@@ -148,20 +188,33 @@ export const useSwitchProviderMutation = (appId: AppId) => {
   const { t } = useTranslation();
 
   return useMutation({
-    mutationFn: async (providerId: string) => {
+    mutationFn: async (providerId: string): Promise<SwitchResult> => {
       return await providersApi.switch(providerId, appId);
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
 
-      // OpenCode: also invalidate live provider IDs cache to update button state
+      // OpenCode/OpenClaw: also invalidate live provider IDs cache to update button state
       if (appId === "opencode") {
         await queryClient.invalidateQueries({
           queryKey: ["opencodeLiveProviderIds"],
         });
+        await queryClient.invalidateQueries({
+          queryKey: ["omo", "current-provider-id"],
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ["omo-slim", "current-provider-id"],
+        });
+      }
+      if (appId === "openclaw") {
+        await queryClient.invalidateQueries({
+          queryKey: openclawKeys.liveProviderIds,
+        });
+        await queryClient.invalidateQueries({
+          queryKey: openclawKeys.defaultModel,
+        });
       }
 
-      // 更新托盘菜单（失败不影响主操作）
       try {
         await providersApi.updateTrayMenu();
       } catch (trayError) {
@@ -170,23 +223,10 @@ export const useSwitchProviderMutation = (appId: AppId) => {
           trayError,
         );
       }
-
-      // OpenCode: show "added to config" message instead of "switched"
-      const messageKey =
-        appId === "opencode"
-          ? "notifications.addToConfigSuccess"
-          : "notifications.switchSuccess";
-      const defaultMessage =
-        appId === "opencode" ? "已添加到配置" : "切换供应商成功";
-
-      toast.success(t(messageKey, { defaultValue: defaultMessage }), {
-        closeButton: true,
-      });
     },
     onError: (error: Error) => {
       const detail = extractErrorMessage(error) || t("common.unknown");
 
-      // 标题与详情分离，便于扫描 + 一键复制
       toast.error(
         t("notifications.switchFailedTitle", { defaultValue: "切换失败" }),
         {

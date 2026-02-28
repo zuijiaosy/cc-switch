@@ -15,12 +15,17 @@ import {
 import { AnimatePresence, motion } from "framer-motion";
 import { Search, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import type { Provider } from "@/types";
 import type { AppId } from "@/lib/api";
 import { providersApi } from "@/lib/api/providers";
 import { useDragSort } from "@/hooks/useDragSort";
-import { useStreamCheck } from "@/hooks/useStreamCheck";
+import {
+  useOpenClawLiveProviderIds,
+  useOpenClawDefaultModel,
+} from "@/hooks/useOpenClaw";
+// import { useStreamCheck } from "@/hooks/useStreamCheck"; // 测试功能已隐藏
 import { ProviderCard } from "@/components/providers/ProviderCard";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
 import {
@@ -29,6 +34,10 @@ import {
   useAddToFailoverQueue,
   useRemoveFromFailoverQueue,
 } from "@/lib/query/failover";
+import {
+  useCurrentOmoProviderId,
+  useCurrentOmoSlimProviderId,
+} from "@/lib/query/omo";
 import { useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -40,8 +49,9 @@ interface ProviderListProps {
   onSwitch: (provider: Provider) => void;
   onEdit: (provider: Provider) => void;
   onDelete: (provider: Provider) => void;
-  /** OpenCode: remove from live config (not delete from database) */
   onRemoveFromConfig?: (provider: Provider) => void;
+  onDisableOmo?: () => void;
+  onDisableOmoSlim?: () => void;
   onDuplicate: (provider: Provider) => void;
   onConfigureUsage?: (provider: Provider) => void;
   onOpenWebsite: (url: string) => void;
@@ -51,6 +61,7 @@ interface ProviderListProps {
   isProxyRunning?: boolean; // 代理服务运行状态
   isProxyTakeover?: boolean; // 代理接管模式（Live配置已被接管）
   activeProviderId?: string; // 代理当前实际使用的供应商 ID（用于故障转移模式下标注绿色边框）
+  onSetAsDefault?: (provider: Provider) => void; // OpenClaw: set as default model
 }
 
 export function ProviderList({
@@ -61,6 +72,8 @@ export function ProviderList({
   onEdit,
   onDelete,
   onRemoveFromConfig,
+  onDisableOmo,
+  onDisableOmoSlim,
   onDuplicate,
   onConfigureUsage,
   onOpenWebsite,
@@ -70,6 +83,7 @@ export function ProviderList({
   isProxyRunning = false,
   isProxyTakeover = false,
   activeProviderId,
+  onSetAsDefault,
 }: ProviderListProps) {
   const { t } = useTranslation();
   const { sortedProviders, sensors, handleDragEnd } = useDragSort(
@@ -77,24 +91,43 @@ export function ProviderList({
     appId,
   );
 
-  // OpenCode: 查询 live 配置中的供应商 ID 列表，用于判断 isInConfig
   const { data: opencodeLiveIds } = useQuery({
     queryKey: ["opencodeLiveProviderIds"],
     queryFn: () => providersApi.getOpenCodeLiveProviderIds(),
     enabled: appId === "opencode",
   });
 
-  // OpenCode: 判断供应商是否已添加到 opencode.json
-  const isProviderInConfig = useCallback(
-    (providerId: string): boolean => {
-      if (appId !== "opencode") return true; // 非 OpenCode 应用始终返回 true
-      return opencodeLiveIds?.includes(providerId) ?? false;
-    },
-    [appId, opencodeLiveIds],
+  // OpenClaw: 查询 live 配置中的供应商 ID 列表，用于判断 isInConfig
+  const { data: openclawLiveIds } = useOpenClawLiveProviderIds(
+    appId === "openclaw",
   );
 
-  // 流式健康检查
-  const { checkProvider, isChecking } = useStreamCheck(appId);
+  // 判断供应商是否已添加到配置（累加模式应用：OpenCode/OpenClaw）
+  const isProviderInConfig = useCallback(
+    (providerId: string): boolean => {
+      if (appId === "opencode") {
+        return opencodeLiveIds?.includes(providerId) ?? false;
+      }
+      if (appId === "openclaw") {
+        return openclawLiveIds?.includes(providerId) ?? false;
+      }
+      return true; // 其他应用始终返回 true
+    },
+    [appId, opencodeLiveIds, openclawLiveIds],
+  );
+
+  // OpenClaw: query default model to determine which provider is default
+  const { data: openclawDefaultModel } = useOpenClawDefaultModel(
+    appId === "openclaw",
+  );
+
+  const isProviderDefaultModel = useCallback(
+    (providerId: string): boolean => {
+      if (appId !== "openclaw" || !openclawDefaultModel?.primary) return false;
+      return openclawDefaultModel.primary.startsWith(providerId + "/");
+    },
+    [appId, openclawDefaultModel],
+  );
 
   // 故障转移相关
   const { data: isAutoFailoverEnabled } = useAutoFailoverEnabled(appId);
@@ -102,11 +135,13 @@ export function ProviderList({
   const addToQueue = useAddToFailoverQueue();
   const removeFromQueue = useRemoveFromFailoverQueue();
 
-  // 联动状态：只有当前应用开启代理接管且故障转移开启时才启用故障转移模式
   const isFailoverModeActive =
     isProxyTakeover === true && isAutoFailoverEnabled === true;
 
-  // 计算供应商在故障转移队列中的优先级（基于 sortIndex 排序）
+  const isOpenCode = appId === "opencode";
+  const { data: currentOmoId } = useCurrentOmoProviderId(isOpenCode);
+  const { data: currentOmoSlimId } = useCurrentOmoSlimProviderId(isOpenCode);
+
   const getFailoverPriority = useCallback(
     (providerId: string): number | undefined => {
       if (!isFailoverModeActive || !failoverQueue) return undefined;
@@ -118,7 +153,6 @@ export function ProviderList({
     [isFailoverModeActive, failoverQueue],
   );
 
-  // 判断供应商是否在故障转移队列中
   const isInFailoverQueue = useCallback(
     (providerId: string): boolean => {
       if (!isFailoverModeActive || !failoverQueue) return false;
@@ -127,7 +161,6 @@ export function ProviderList({
     [isFailoverModeActive, failoverQueue],
   );
 
-  // 切换供应商的故障转移队列状态
   const handleToggleFailover = useCallback(
     (providerId: string, enabled: boolean) => {
       if (enabled) {
@@ -139,13 +172,36 @@ export function ProviderList({
     [appId, addToQueue, removeFromQueue],
   );
 
-  const handleTest = (provider: Provider) => {
-    checkProvider(provider.id, provider.name);
-  };
-
   const [searchTerm, setSearchTerm] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Import current live config as default provider
+  const queryClient = useQueryClient();
+  const importMutation = useMutation({
+    mutationFn: async (): Promise<boolean> => {
+      if (appId === "opencode") {
+        const count = await providersApi.importOpenCodeFromLive();
+        return count > 0;
+      }
+      if (appId === "openclaw") {
+        const count = await providersApi.importOpenClawFromLive();
+        return count > 0;
+      }
+      return providersApi.importDefault(appId);
+    },
+    onSuccess: (imported) => {
+      if (imported) {
+        queryClient.invalidateQueries({ queryKey: ["providers", appId] });
+        toast.success(t("provider.importCurrentDescription"));
+      } else {
+        toast.info(t("provider.noProviders"));
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -200,7 +256,12 @@ export function ProviderList({
   }
 
   if (sortedProviders.length === 0) {
-    return <ProviderEmptyState onCreate={onCreate} />;
+    return (
+      <ProviderEmptyState
+        onCreate={onCreate}
+        onImport={() => importMutation.mutate()}
+      />
+    );
   }
 
   const renderProviderList = () => (
@@ -214,35 +275,55 @@ export function ProviderList({
         strategy={verticalListSortingStrategy}
       >
         <div className="space-y-3">
-          {filteredProviders.map((provider) => (
-            <SortableProviderCard
-              key={provider.id}
-              provider={provider}
-              isCurrent={provider.id === currentProviderId}
-              appId={appId}
-              isInConfig={isProviderInConfig(provider.id)}
-              onSwitch={onSwitch}
-              onEdit={onEdit}
-              onDelete={onDelete}
-              onRemoveFromConfig={onRemoveFromConfig}
-              onDuplicate={onDuplicate}
-              onConfigureUsage={onConfigureUsage}
-              onOpenWebsite={onOpenWebsite}
-              onOpenTerminal={onOpenTerminal}
-              onTest={appId !== "opencode" ? handleTest : undefined}
-              isTesting={isChecking(provider.id)}
-              isProxyRunning={isProxyRunning}
-              isProxyTakeover={isProxyTakeover}
-              // 故障转移相关：联动状态
-              isAutoFailoverEnabled={isFailoverModeActive}
-              failoverPriority={getFailoverPriority(provider.id)}
-              isInFailoverQueue={isInFailoverQueue(provider.id)}
-              onToggleFailover={(enabled) =>
-                handleToggleFailover(provider.id, enabled)
-              }
-              activeProviderId={activeProviderId}
-            />
-          ))}
+          {filteredProviders.map((provider) => {
+            const isOmo = provider.category === "omo";
+            const isOmoSlim = provider.category === "omo-slim";
+            const isOmoCurrent = isOmo && provider.id === (currentOmoId || "");
+            const isOmoSlimCurrent =
+              isOmoSlim && provider.id === (currentOmoSlimId || "");
+            return (
+              <SortableProviderCard
+                key={provider.id}
+                provider={provider}
+                isCurrent={
+                  isOmo
+                    ? isOmoCurrent
+                    : isOmoSlim
+                      ? isOmoSlimCurrent
+                      : provider.id === currentProviderId
+                }
+                appId={appId}
+                isInConfig={isProviderInConfig(provider.id)}
+                isOmo={isOmo}
+                isOmoSlim={isOmoSlim}
+                onSwitch={onSwitch}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onRemoveFromConfig={onRemoveFromConfig}
+                onDisableOmo={onDisableOmo}
+                onDisableOmoSlim={onDisableOmoSlim}
+                onDuplicate={onDuplicate}
+                onConfigureUsage={onConfigureUsage}
+                onOpenWebsite={onOpenWebsite}
+                onOpenTerminal={onOpenTerminal}
+                isTesting={false} // isChecking(provider.id) - 测试功能已隐藏
+                isProxyRunning={isProxyRunning}
+                isProxyTakeover={isProxyTakeover}
+                isAutoFailoverEnabled={isFailoverModeActive}
+                failoverPriority={getFailoverPriority(provider.id)}
+                isInFailoverQueue={isInFailoverQueue(provider.id)}
+                onToggleFailover={(enabled) =>
+                  handleToggleFailover(provider.id, enabled)
+                }
+                activeProviderId={activeProviderId}
+                // OpenClaw: default model
+                isDefaultModel={isProviderDefaultModel(provider.id)}
+                onSetAsDefault={
+                  onSetAsDefault ? () => onSetAsDefault(provider) : undefined
+                }
+              />
+            );
+          })}
         </div>
       </SortableContext>
     </DndContext>
@@ -332,11 +413,14 @@ interface SortableProviderCardProps {
   isCurrent: boolean;
   appId: AppId;
   isInConfig: boolean;
+  isOmo: boolean;
+  isOmoSlim: boolean;
   onSwitch: (provider: Provider) => void;
   onEdit: (provider: Provider) => void;
   onDelete: (provider: Provider) => void;
-  /** OpenCode: remove from live config (not delete from database) */
   onRemoveFromConfig?: (provider: Provider) => void;
+  onDisableOmo?: () => void;
+  onDisableOmoSlim?: () => void;
   onDuplicate: (provider: Provider) => void;
   onConfigureUsage?: (provider: Provider) => void;
   onOpenWebsite: (url: string) => void;
@@ -345,12 +429,14 @@ interface SortableProviderCardProps {
   isTesting: boolean;
   isProxyRunning: boolean;
   isProxyTakeover: boolean;
-  // 故障转移相关
   isAutoFailoverEnabled: boolean;
   failoverPriority?: number;
   isInFailoverQueue: boolean;
   onToggleFailover: (enabled: boolean) => void;
   activeProviderId?: string;
+  // OpenClaw: default model
+  isDefaultModel?: boolean;
+  onSetAsDefault?: () => void;
 }
 
 function SortableProviderCard({
@@ -358,10 +444,14 @@ function SortableProviderCard({
   isCurrent,
   appId,
   isInConfig,
+  isOmo,
+  isOmoSlim,
   onSwitch,
   onEdit,
   onDelete,
   onRemoveFromConfig,
+  onDisableOmo,
+  onDisableOmoSlim,
   onDuplicate,
   onConfigureUsage,
   onOpenWebsite,
@@ -375,6 +465,8 @@ function SortableProviderCard({
   isInFailoverQueue,
   onToggleFailover,
   activeProviderId,
+  isDefaultModel,
+  onSetAsDefault,
 }: SortableProviderCardProps) {
   const {
     setNodeRef,
@@ -397,10 +489,14 @@ function SortableProviderCard({
         isCurrent={isCurrent}
         appId={appId}
         isInConfig={isInConfig}
+        isOmo={isOmo}
+        isOmoSlim={isOmoSlim}
         onSwitch={onSwitch}
         onEdit={onEdit}
         onDelete={onDelete}
         onRemoveFromConfig={onRemoveFromConfig}
+        onDisableOmo={onDisableOmo}
+        onDisableOmoSlim={onDisableOmoSlim}
         onDuplicate={onDuplicate}
         onConfigureUsage={
           onConfigureUsage ? (item) => onConfigureUsage(item) : () => undefined
@@ -416,12 +512,14 @@ function SortableProviderCard({
           listeners,
           isDragging,
         }}
-        // 故障转移相关
         isAutoFailoverEnabled={isAutoFailoverEnabled}
         failoverPriority={failoverPriority}
         isInFailoverQueue={isInFailoverQueue}
         onToggleFailover={onToggleFailover}
         activeProviderId={activeProviderId}
+        // OpenClaw: default model
+        isDefaultModel={isDefaultModel}
+        onSetAsDefault={onSetAsDefault}
       />
     </div>
   );
