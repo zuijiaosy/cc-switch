@@ -28,6 +28,23 @@ export interface OpenCodeProviderPreset {
 }
 
 /**
+ * OpenCode 模型预设变体映射
+ * 按 npm 包名索引，为各模型提供预设 variants/options/限制信息
+ */
+export interface OpenCodePresetModel {
+  id: string;
+  variants?: Record<string, unknown>;
+  options?: Record<string, unknown>;
+  contextLimit?: number;
+  outputLimit?: number;
+}
+
+export const OPENCODE_PRESET_MODEL_VARIANTS: Record<
+  string,
+  OpenCodePresetModel[]
+> = {};
+
+/**
  * OpenCode npm 包选项（AI SDK 生态）
  */
 export const opencodeNpmPackages = [

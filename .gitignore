@@ -24,3 +24,5 @@ flatpak/cc-switch.deb
 flatpak-build/
 flatpak-repo/
 .worktrees/
+
+/.serena
