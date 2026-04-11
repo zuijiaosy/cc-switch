@@ -149,10 +149,17 @@ jobs:
           echo "✅ Tauri signing key prepared"
 
       - name: Import Apple signing certificate
-        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE != '' && secrets.KEYCHAIN_PASSWORD != '' && secrets.APPLE_CERTIFICATE_PASSWORD != ''
+        if: runner.os == 'macOS'
+        id: apple_signing
         shell: bash
         run: |
           set -euo pipefail
+          if [ -z "${{ secrets.APPLE_CERTIFICATE }}" ] || [ -z "${{ secrets.KEYCHAIN_PASSWORD }}" ] || [ -z "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" ]; then
+            echo "ℹ️ Apple signing secrets are not configured; continuing without macOS code signing"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           # Decode .p12 certificate from base64
           CERT_PATH="$RUNNER_TEMP/certificate.p12"
           printf '%s' "${{ secrets.APPLE_CERTIFICATE }}" | (base64 --decode 2>/dev/null || base64 -D) > "$CERT_PATH"
@@ -186,6 +193,8 @@ jobs:
           fi
           echo "✅ Signing identity: $IDENTITY"
           echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
 
           # Cleanup certificate file
           rm -f "$CERT_PATH"
@@ -306,7 +315,7 @@ jobs:
           fi
 
       - name: Notarize macOS DMG
-        if: runner.os == 'macOS' && env.APPLE_SIGNING_IDENTITY != '' && secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != ''
+        if: runner.os == 'macOS' && steps.apple_signing.outputs.available == 'true'
         shell: bash
         timeout-minutes: 30
         env:
@@ -315,6 +324,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_PASSWORD:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ]; then
+            echo "ℹ️ Apple notarization secrets are not configured; skipping DMG notarization"
+            exit 0
+          fi
 
           DMG_PATH=$(find release-assets -maxdepth 1 -name "*.dmg" -type f | head -1 || true)
           if [ -z "$DMG_PATH" ]; then
@@ -348,7 +361,7 @@ jobs:
           done
 
       - name: Verify macOS code signing and notarization
-        if: runner.os == 'macOS' && env.APPLE_SIGNING_IDENTITY != ''
+        if: runner.os == 'macOS' && steps.apple_signing.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
