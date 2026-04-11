@@ -149,7 +149,7 @@ jobs:
           echo "✅ Tauri signing key prepared"
 
       - name: Import Apple signing certificate
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE != '' && secrets.KEYCHAIN_PASSWORD != '' && secrets.APPLE_CERTIFICATE_PASSWORD != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -253,9 +253,13 @@ jobs:
             exit 1
           fi
 
-          # Staple notarization ticket to .app (Tauri already notarized it)
-          xcrun stapler staple "$APP_PATH"
-          echo "✅ .app stapled"
+          # Staple notarization ticket to .app only when Apple signing is configured
+          if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            xcrun stapler staple "$APP_PATH"
+            echo "✅ .app stapled"
+          else
+            echo "ℹ️ APPLE_SIGNING_IDENTITY is not set; skipping .app stapling"
+          fi
 
           # 1) Collect .tar.gz (updater artifact) if present
           if [ -n "$TAR_GZ" ]; then
@@ -272,38 +276,37 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "release-assets/$NEW_ZIP"
           echo "macOS zip ready: $NEW_ZIP"
 
-          # 3) Create styled DMG with create-dmg (Tauri's built-in DMG styling doesn't work on CI)
-          if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
-            echo "❌ APPLE_SIGNING_IDENTITY is missing before DMG creation" >&2
-            exit 1
+          # 3) Create styled DMG only when Apple signing is configured
+          if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install create-dmg
+            NEW_DMG="CC-Switch-${VERSION}-macOS.dmg"
+            DMG_STAGE_DIR="$RUNNER_TEMP/dmg-stage"
+            rm -rf "$DMG_STAGE_DIR"
+            mkdir -p "$DMG_STAGE_DIR"
+            ditto "$APP_PATH" "$DMG_STAGE_DIR/CC Switch.app"
+
+            create-dmg \
+              --volname "CC Switch" \
+              --background "src-tauri/icons/dmg-background.png" \
+              --window-size 660 400 \
+              --window-pos 200 120 \
+              --icon-size 80 \
+              --icon "CC Switch.app" 180 220 \
+              --hide-extension "CC Switch.app" \
+              --app-drop-link 480 220 \
+              --codesign "$APPLE_SIGNING_IDENTITY" \
+              --no-internet-enable \
+              "release-assets/$NEW_DMG" \
+              "$DMG_STAGE_DIR"
+
+            rm -rf "$DMG_STAGE_DIR"
+            echo "✅ Styled DMG created: $NEW_DMG"
+          else
+            echo "ℹ️ APPLE_SIGNING_IDENTITY is not set; skipping DMG creation"
           fi
 
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install create-dmg
-          NEW_DMG="CC-Switch-${VERSION}-macOS.dmg"
-          DMG_STAGE_DIR="$RUNNER_TEMP/dmg-stage"
-          rm -rf "$DMG_STAGE_DIR"
-          mkdir -p "$DMG_STAGE_DIR"
-          ditto "$APP_PATH" "$DMG_STAGE_DIR/CC Switch.app"
-
-          create-dmg \
-            --volname "CC Switch" \
-            --background "src-tauri/icons/dmg-background.png" \
-            --window-size 660 400 \
-            --window-pos 200 120 \
-            --icon-size 80 \
-            --icon "CC Switch.app" 180 220 \
-            --hide-extension "CC Switch.app" \
-            --app-drop-link 480 220 \
-            --codesign "$APPLE_SIGNING_IDENTITY" \
-            --no-internet-enable \
-            "release-assets/$NEW_DMG" \
-            "$DMG_STAGE_DIR"
-
-          rm -rf "$DMG_STAGE_DIR"
-          echo "✅ Styled DMG created: $NEW_DMG"
-
       - name: Notarize macOS DMG
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_IDENTITY != '' && secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != ''
         shell: bash
         timeout-minutes: 30
         env:
@@ -345,7 +348,7 @@ jobs:
           done
 
       - name: Verify macOS code signing and notarization
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_IDENTITY != ''
         shell: bash
         run: |
           set -euo pipefail
