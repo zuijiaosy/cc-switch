@@ -198,11 +198,19 @@ def configure(source: Path) -> None:
 
 
 def test(source: Path) -> None:
+    source = source.resolve(strict=True)
     tests = config()["test_paths"]
     if not tests or not all(isinstance(p, str) and (source / p).is_file() for p in tests):
         fail("Configured regression tests are missing; review the upstream change before publishing")
+    vitest_config = source / "vitest.config.ts"
+    if not vitest_config.is_file():
+        fail("Upstream Vitest configuration is missing")
     command = "pnpm.cmd" if os.name == "nt" else "pnpm"
-    subprocess.run([command, "vitest", "run", *tests], cwd=source, check=True)
+    subprocess.run(
+        [command, "exec", "vitest", "run", "--root", str(source), "--config", str(vitest_config), *tests],
+        cwd=source,
+        check=True,
+    )
 
 
 def archive(source: Path) -> None:
