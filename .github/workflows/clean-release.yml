@@ -73,10 +73,11 @@ jobs:
           pnpm install --frozen-lockfile
       - name: Typecheck and regression tests
         if: steps.detect.outputs.build == 'true'
+        working-directory: source
         run: |
-          pnpm --dir source typecheck
-          python .clean/scripts/release.py test
-          pnpm --dir source build:renderer
+          pnpm typecheck
+          python ../.clean/scripts/release.py test --source .
+          pnpm build:renderer
       - name: Archive the exact prepared application source
         if: steps.detect.outputs.build == 'true'
         run: python .clean/scripts/release.py archive
