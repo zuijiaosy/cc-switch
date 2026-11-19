@@ -1395,3 +1395,19 @@ index 3cc8908..f19123c 100644
  
      let providers_before = state
          .db
+diff --git a/vitest.config.ts b/vitest.config.ts
+index e226110..8cd6f23 100644
+--- a/vitest.config.ts
++++ b/vitest.config.ts
+@@ -12,7 +12,10 @@ export default defineConfig({
+   test: {
+     include: ["{src,tests}/**/*.{test,spec}.{ts,tsx,js,jsx}"],
+     environment: "jsdom",
+-    setupFiles: ["./tests/setupGlobals.ts", "./tests/setupTests.ts"],
++    setupFiles: [
++      path.resolve(__dirname, "./tests/setupGlobals.ts"),
++      path.resolve(__dirname, "./tests/setupTests.ts"),
++    ],
+     globals: true,
+     coverage: {
+       reporter: ["text", "lcov"],
