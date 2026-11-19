@@ -1,0 +1,324 @@
+name: Clean upstream release
+
+on:
+  workflow_dispatch:
+  schedule:
+    # UTC 00:17/06:17/12:17/18:17 = Beijing 08:17/14:17/20:17/02:17.
+    - cron: '17 */6 * * *'
+  push:
+    branches: [main]
+    paths:
+      - '.clean/**'
+      - '.github/workflows/clean-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clean-upstream-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Check upstream and validate clean source
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    outputs:
+      build: ${{ steps.detect.outputs.build }}
+      release_tag: ${{ steps.detect.outputs.release_tag }}
+      signed_updates: ${{ steps.detect.outputs.signed_updates }}
+    env:
+      CLEAN_REPOSITORY: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Validate release automation
+        run: python -m unittest discover -s .clean/tests -v
+      - name: Resolve new official stable release
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAURI_PUBLIC_KEY: ${{ vars.TAURI_PUBLIC_KEY }}
+          CLEAN_UPDATE_ENDPOINT: ${{ vars.CLEAN_UPDATE_ENDPOINT }}
+          HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: python .clean/scripts/release.py detect
+      - name: Checkout exact official release commit
+        if: steps.detect.outputs.build == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: farion1231/cc-switch
+          ref: ${{ steps.detect.outputs.upstream_sha }}
+          path: source
+          persist-credentials: false
+      - name: Apply audited patch and configure release feed
+        if: steps.detect.outputs.build == 'true'
+        run: |
+          python .clean/scripts/apply-clean.py source
+          python .clean/scripts/release.py configure
+          python .clean/scripts/verify-clean.py source
+      - uses: actions/setup-node@v6
+        if: steps.detect.outputs.build == 'true'
+        with:
+          node-version: '20'
+      - name: Install pinned frontend dependencies
+        if: steps.detect.outputs.build == 'true'
+        working-directory: source
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+        run: |
+          corepack enable
+          corepack install
+          pnpm install --frozen-lockfile
+      - name: Typecheck and regression tests
+        if: steps.detect.outputs.build == 'true'
+        run: |
+          pnpm --dir source typecheck
+          python .clean/scripts/release.py test
+          pnpm --dir source build:renderer
+      - name: Archive the exact prepared application source
+        if: steps.detect.outputs.build == 'true'
+        run: python .clean/scripts/release.py archive
+      - name: Upload verified source for all builders
+        if: steps.detect.outputs.build == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: clean-source
+          path: |
+            .clean-state/source.tar.gz
+            .clean-state/release.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            os: windows-2022
+            target: ''
+            bundles: msi
+          - platform: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            bundles: msi
+          - platform: linux-x64
+            os: ubuntu-22.04
+            target: ''
+            bundles: appimage,deb,rpm
+          - platform: linux-arm64
+            os: ubuntu-22.04-arm
+            target: ''
+            bundles: appimage,deb,rpm
+          - platform: macos
+            os: macos-15
+            target: universal-apple-darwin
+            bundles: app,dmg
+    env:
+      CARGO_BUILD_JOBS: '2'
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: clean-source
+          path: .clean-state
+      - name: Unpack and verify prepared source
+        # The archive SHA is checked here; application source checks ran before
+        # archiving. This extracted snapshot deliberately contains no .git.
+        run: python .clean/scripts/release.py unpack
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - name: Read official pinned Rust version
+        id: rust
+        run: |
+          channel=$(sed -nE 's/^channel *= *"([^"]+)".*/\1/p' source/rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.rust.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: source/src-tauri -> target
+          key: clean-${{ matrix.platform }}
+      - name: Remove stale installer bundles restored by cache
+        run: |
+          python - <<'PY'
+          import pathlib, shutil
+          for path in pathlib.Path('source/src-tauri/target').glob('**/release/bundle'):
+              shutil.rmtree(path)
+          PY
+      - name: Add macOS and Windows cross targets
+        env:
+          BUILD_PLATFORM: ${{ matrix.platform }}
+        run: |
+          if [ "$BUILD_PLATFORM" = macos ]; then
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          elif [ "$BUILD_PLATFORM" = windows-arm64 ]; then
+            rustup target add aarch64-pc-windows-msvc
+          fi
+      - name: Configure LLVM for Windows ARM64
+        if: matrix.platform == 'windows-arm64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $llvmBin = 'C:\Program Files\LLVM\bin'
+          if (-not (Test-Path $llvmBin)) { throw 'LLVM is missing on the Windows ARM64 runner' }
+          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CLANG_PATH=$(Join-Path $llvmBin 'clang.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config curl wget file patchelf libssl-dev rpm flatpak flatpak-builder elfutils xdg-utils libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev
+      - name: Install pinned frontend dependencies
+        working-directory: source
+        run: |
+          corepack enable
+          corepack install
+          pnpm install --frozen-lockfile
+      - name: Configure macOS code signing
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash .clean/scripts/apple-signing.sh
+      - name: Run startup and import regressions
+        if: matrix.platform == 'linux-x64'
+        working-directory: source/src-tauri
+        run: |
+          mkdir -p ../dist
+          cargo test --locked --release --lib clean_startup
+          cargo test --locked --release --lib ensure_official_seed_tests
+          cargo test --locked --release --test integration first_run_
+          cargo test --locked --release --test integration import_default_config_grokbuild
+          cargo test --locked --release --test integration codex_startup_import
+      - name: Build application and installers
+        working-directory: source
+        env:
+          SIGNED_UPDATES: ${{ needs.prepare.outputs.signed_updates }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          BUILD_TARGET: ${{ matrix.target }}
+          BUILD_BUNDLES: ${{ matrix.bundles }}
+          LINUXDEPLOY_EXCLUDED_LIBRARIES: 'libwayland-client.so*'
+        run: |
+          if [ "$SIGNED_UPDATES" != true ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+          for name in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then unset "$name"; fi
+          done
+          args=(build --bundles "$BUILD_BUNDLES")
+          if [ -n "$BUILD_TARGET" ]; then args+=(--target "$BUILD_TARGET"); fi
+          pnpm tauri "${args[@]}"
+      - name: Verify notarized macOS app
+        if: runner.os == 'macOS' && env.MACOS_NOTARIZED == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          app='source/src-tauri/target/universal-apple-darwin/release/bundle/macos/CC Switch.app'
+          codesign --verify --deep --strict "$app"
+          spctl -a -t exec -vv "$app"
+          xcrun stapler validate "$app"
+          dmg=$(find source/src-tauri/target/universal-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)
+          test -n "$dmg"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$dmg"
+          codesign --verify "$dmg"
+          xcrun stapler validate "$dmg"
+      - name: Verify Windows installer cannot force reboot
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = Get-ChildItem source/src-tauri/target -Recurse -Filter *.msi | Select-Object -First 1
+          if ($null -eq $msi) { throw 'No MSI installer found' }
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $db = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($msi.FullName, 0))
+          $view = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @('SELECT `Value` FROM `Property` WHERE `Property`=''REBOOT'''))
+          $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
+          $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+          if ($null -eq $record) { throw 'MSI REBOOT property missing' }
+          $value = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
+          if ($value -ne 'ReallySuppress') { throw 'MSI must set REBOOT=ReallySuppress' }
+          $view.GetType().InvokeMember('Close', 'InvokeMethod', $null, $view, $null) | Out-Null
+      - name: Collect all platform assets
+        env:
+          BUILD_PLATFORM: ${{ matrix.platform }}
+        run: python .clean/scripts/release.py collect --platform "$BUILD_PLATFORM"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: clean-assets-${{ matrix.platform }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Clean up temporary Apple signing material
+        if: always() && runner.os == 'macOS'
+        run: |
+          if [ -f "$RUNNER_TEMP/cc-switch-original-keychain.txt" ]; then
+            original=$(tr -d '"' < "$RUNNER_TEMP/cc-switch-original-keychain.txt" | xargs)
+            security default-keychain -s "$original" || true
+          fi
+          if [ -f "$RUNNER_TEMP/cc-switch-clean.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/cc-switch-clean.keychain-db" || true
+          fi
+          rm -f "$RUNNER_TEMP/cc-switch-clean.p12"
+
+  publish:
+    name: Publish complete verified release
+    needs: [prepare, build]
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: clean-source
+          path: .clean-state
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: clean-assets-*
+          path: release-assets
+          merge-multiple: true
+      - name: Install signature verifier
+        if: needs.prepare.outputs.signed_updates == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+      - name: Verify all assets and publish atomically from a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .clean/scripts/release.py publish
