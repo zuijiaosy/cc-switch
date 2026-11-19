@@ -1,951 +1,3 @@
-diff --git a/src/components/providers/forms/CopilotProviderForm.tsx b/src/components/providers/forms/CopilotProviderForm.tsx
-index 52d2929..21d1dd7 100644
---- a/src/components/providers/forms/CopilotProviderForm.tsx
-+++ b/src/components/providers/forms/CopilotProviderForm.tsx
-@@ -294,11 +294,9 @@ export function CopilotProviderForm({
-   const { t } = useTranslation();
-   const isEdit = Boolean(initialData);
-   const initialConfig = initialData?.settingsConfig;
--  const [presetId, setPresetId] = useState(
--    isEdit ? "custom" : COPILOT_OFFICIAL_PRESET_ID,
--  );
-+  const [presetId, setPresetId] = useState("custom");
-   const [category, setCategory] = useState<ProviderCategory>(
--    initialData?.category ?? (isEdit ? "custom" : "official"),
-+    initialData?.category ?? "custom",
-   );
-   // 编辑时按配置认（没有 provider 节点的旧卡也是官方卡），新建时按选的预设
-   const isOfficial = isEdit
-@@ -350,12 +348,10 @@ export function CopilotProviderForm({
- 
-   const form = useForm<ProviderFormData>({
-     defaultValues: {
--      name: initialData?.name ?? (isEdit ? "" : copilotOfficialPreset.name),
-+      name: initialData?.name ?? "",
-       notes: initialData?.notes ?? "",
--      websiteUrl:
--        initialData?.websiteUrl ??
--        (isEdit ? "" : copilotOfficialPreset.websiteUrl),
--      icon: initialData?.icon ?? (isEdit ? "" : "githubcopilot"),
-+      websiteUrl: initialData?.websiteUrl ?? "",
-+      icon: initialData?.icon ?? "",
-       iconColor: initialData?.iconColor ?? "",
-       settingsConfig: "",
-     },
-diff --git a/src/components/providers/forms/ProviderPresetSelector.tsx b/src/components/providers/forms/ProviderPresetSelector.tsx
-index af5bc82..424e46b 100644
---- a/src/components/providers/forms/ProviderPresetSelector.tsx
-+++ b/src/components/providers/forms/ProviderPresetSelector.tsx
-@@ -1,10 +1,9 @@
--import { useEffect, useMemo, useRef, useState } from "react";
-+import { useEffect, useRef, useState } from "react";
- import { createPortal } from "react-dom";
- import { useTranslation } from "react-i18next";
--import type { TFunction } from "i18next";
--import { Search, SlidersHorizontal, X, Zap } from "lucide-react";
-+import { SlidersHorizontal, Zap } from "lucide-react";
- import { Button } from "@/components/ui/button";
--import { Input } from "@/components/ui/input";
-+import { connectionModeFor } from "@/config/cleanProviderPolicy";
- import { ClaudeIcon, CodexIcon, GeminiIcon } from "@/components/BrandIcons";
- import { ProviderIconBox } from "@/components/ProviderIconBox";
- import type { ProviderPreset } from "@/config/claudeProviderPresets";
-@@ -38,29 +37,22 @@ import {
- } from "@/components/ui/select";
- import { ConfirmDialog } from "@/components/ConfirmDialog";
- import {
--  PRESET_GROUP_ORDER,
-   familyDisplayName,
-   groupPresetRows,
-   loginAccountKey,
-   matchPresetRow,
-   presetDisplayName,
-   presetDomain,
--  presetGroup,
-   presetMatches,
-   presetNeedsRouting,
-   presetPlanLabel,
-   presetRegionLabel,
--  presetRowGroup,
--  presetRowName,
--  presetRowNeedsRouting,
-   presetVersionLabel,
-   presetVersionLayout,
-   presetVersionShortLabel,
-   presetVersions,
--  sectionPresetRows,
-   sortPresetRowsByName,
-   sortPresetsByName,
--  type PresetGroup,
-   type PresetRowItem,
- } from "./presetGroups";
- 
-@@ -129,8 +121,6 @@ export function getVisiblePresetRows(
-   return sortPresetRowsByName(found, t);
- }
- 
--type PickerCategory = "all" | PresetGroup | "universal";
--
- interface ProviderPresetSelectorProps {
-   selectedPresetId: string | null;
-   presetEntries: PresetEntry[];
-@@ -554,325 +544,73 @@ function PresetPicker({
-   onManageUniversalProviders,
- }: PresetPickerProps) {
-   const { t } = useTranslation();
--  const [query, setQuery] = useState("");
--  const [category, setCategory] = useState<PickerCategory>("all");
--  const searchRef = useRef<HTMLInputElement>(null);
--
--  useEffect(() => {
--    const frame = requestAnimationFrame(() => searchRef.current?.focus());
--    return () => cancelAnimationFrame(frame);
--  }, []);
--
--  // ⌘F / Ctrl+F 回到搜索框（捕获阶段，别让后面供应商列表的同名快捷键接到）
--  useEffect(() => {
--    const onKeyDown = (event: KeyboardEvent) => {
--      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
--        event.preventDefault();
--        event.stopPropagation();
--        searchRef.current?.focus();
--      }
--    };
--    globalThis.addEventListener("keydown", onKeyDown, true);
--    return () => globalThis.removeEventListener("keydown", onKeyDown, true);
--  }, []);
--
--  const groups = useMemo(() => {
--    const byGroup = new Map<PresetGroup, PresetEntry[]>();
--    for (const entry of entries) {
--      const group = presetGroup(entry.preset);
--      byGroup.set(group, [...(byGroup.get(group) ?? []), entry]);
--    }
--    return byGroup;
--  }, [entries]);
--
--  // 同一家的多个版本合成一行，数量也按行数算
--  const matching = useMemo(
--    () => getVisiblePresetRows(entries, { query, t }),
--    [entries, query, t],
--  );
--  const matchingUniversal = useMemo(
--    () =>
--      onUniversalPresetSelect
--        ? universalProviderPresets.filter((preset) =>
--            preset.name.toLowerCase().includes(query.trim().toLowerCase()),
--          )
--        : [],
--    [onUniversalPresetSelect, query],
--  );
--
--  const countFor = (key: PickerCategory) => {
--    if (key === "universal") return matchingUniversal.length;
--    // 「自定义配置」固定在第一行，不计入数量
--    if (key === "all") return matching.length;
--    return matching.filter((item) => presetRowGroup(item.row) === key).length;
--  };
--
--  const shown =
--    category === "all"
--      ? matching
--      : category === "universal"
--        ? []
--        : matching.filter((item) => presetRowGroup(item.row) === category);
--
--  const navItems: PickerCategory[] = [
--    "all",
--    ...PRESET_GROUP_ORDER.filter((group) => groups.has(group)),
--  ];
--  const searching = query.trim().length > 0;
--
--  const customRow = (
--    <PresetRow
--      icon={<PresetIconBox />}
--      name={t("providerPreset.custom")}
--      detail={t("providerPreset.customDetail")}
--      selected={selectedPresetId === "custom"}
--      onClick={() => onPick("custom")}
--    />
--  );
--  const renderRow = ({ row, hits }: VisiblePresetRow) => {
--    const first = row.versions[0];
--    // 搜索命中某个版本时选中那个版本，否则选第一个
--    const target = row.versions[hits[0] ?? 0];
--    return (
--      <PresetRow
--        key={row.key}
--        icon={<PresetIconBox preset={first.preset} />}
--        name={presetRowName(row, t)}
--        detail={presetRowDetail(appId, row, hits, t)}
--        needsRoute={presetRowNeedsRouting(appId, row)}
--        selected={row.versions.some((entry) => entry.id === selectedPresetId)}
--        onClick={() => onPick(target.id)}
--      />
--    );
--  };
--
--  const nothing =
--    searching &&
--    matching.length === 0 &&
--    (category !== "universal" || matchingUniversal.length === 0);
-+  // The provider directory is intentionally absent. Retain only the dedicated
-+  // account / SDK / plugin form modes, behind an explicit connection control.
-+  const modes = entries.filter((entry) => connectionModeFor(entry.preset));
-+  const selectedMode = modes.some((entry) => entry.id === selectedPresetId)
-+    ? selectedPresetId!
-+    : "custom";
- 
-   return (
--    <div className="flex h-full min-h-0 flex-col">
--      <div className="shrink-0 px-6 pb-3 pt-4">
--        <div className="relative">
--          <Search
--            className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-3"
--            strokeWidth={1.5}
--          />
--          <Input
--            ref={searchRef}
--            value={query}
--            onChange={(event) => setQuery(event.target.value)}
--            onKeyDown={(event) => {
--              if (event.key === "Escape" && query) {
--                event.preventDefault();
--                setQuery("");
--              }
--            }}
--            placeholder={t("providerPreset.searchPlaceholder")}
--            aria-label={t("providerPreset.searchAriaLabel")}
--            className="pe-9 ps-9"
--          />
--          {query && (
--            <button
--              type="button"
--              onClick={() => {
--                setQuery("");
--                searchRef.current?.focus();
--              }}
--              aria-label={t("providerPreset.clearSearch")}
--              className="absolute end-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-control text-fg-3 hover:bg-subtle hover:text-fg-1"
--            >
--              <X className="h-3.5 w-3.5" />
--            </button>
--          )}
--        </div>
--      </div>
--
--      <div className="flex min-h-0 flex-1 gap-4 px-6 pb-4">
--        <div
--          role="group"
--          aria-label={t("providerPreset.categoriesLabel")}
--          className="flex w-[168px] shrink-0 flex-col gap-0.5 overflow-y-auto"
--        >
--          {navItems.map((key) => (
--            <CategoryButton
--              key={key}
--              label={t(`providerPreset.group.${key}`)}
--              count={countFor(key)}
--              active={category === key}
--              dim={searching && countFor(key) === 0}
--              onClick={() => setCategory(key)}
--            />
--          ))}
--          {onUniversalPresetSelect && (
--            <>
--              <div className="my-2 border-t border-border" />
--              <div className="px-2 pb-1 text-badge text-fg-3">
--                {t("providerPreset.crossApp")}
--              </div>
--              <CategoryButton
--                label={t("providerPreset.group.universal")}
--                count={countFor("universal")}
--                active={category === "universal"}
--                dim={searching && countFor("universal") === 0}
--                onClick={() => setCategory("universal")}
-+    <div className="flex h-full min-h-0 flex-col gap-5 overflow-y-auto px-6 py-4">
-+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-+        <PresetRow
-+          icon={<PresetIconBox />}
-+          name={t("providerPreset.custom")}
-+          detail={t("providerPreset.customDetail")}
-+          selected={selectedPresetId === "custom"}
-+          onClick={() => onPick("custom")}
-+        />
-+        {onUniversalPresetSelect &&
-+          universalProviderPresets
-+            .filter((preset) => preset.isCustomTemplate)
-+            .map((preset) => (
-+              <PresetRow
-+                key={preset.providerType}
-+                icon={<PresetIconBox />}
-+                name={preset.name}
-+                detail={t("providerPreset.universalDetail")}
-+                onClick={() => onUniversalPresetSelect(preset)}
-               />
--            </>
--          )}
--        </div>
--
--        <div className="min-w-0 flex-1 overflow-y-auto">
--          {category !== "all" && (
--            <p className="mb-2 text-caption text-fg-2">
--              {t(`providerPreset.groupHint.${category}`)}
--            </p>
--          )}
--
--          {nothing ? (
--            <div className="flex flex-col items-center gap-2 py-12 text-center">
--              <p className="text-body text-fg-1">
--                {t("providerPreset.noResults", { query: query.trim() })}
--              </p>
--              <p className="text-caption text-fg-2">
--                {t("providerPreset.noResultsHint")}
--              </p>
--              <Button
--                type="button"
--                variant="neutral"
--                size="compact"
--                className="mt-1"
--                onClick={() => onPick("custom")}
--              >
--                {t("providerPreset.useCustom")}
--              </Button>
--            </div>
--          ) : category === "universal" ? (
--            <div className="grid grid-cols-2 gap-2">
--              {matchingUniversal.map((preset) => (
--                <PresetRow
--                  key={`universal-${preset.providerType}`}
--                  icon={
--                    <ProviderIconBox
--                      icon={preset.icon}
--                      name={preset.name}
--                      className="bg-surface"
--                      iconClassName="shrink-0 text-fg-1"
--                    />
--                  }
--                  name={preset.name}
--                  detail={t("providerPreset.universalDetail")}
--                  onClick={() => onUniversalPresetSelect?.(preset)}
--                />
--              ))}
--              {onManageUniversalProviders && (
--                <button
--                  type="button"
--                  onClick={onManageUniversalProviders}
--                  className="col-span-2 justify-self-start text-caption text-fg-1 underline underline-offset-2 hover:text-fg-2"
--                >
--                  {t("providerPreset.manageUniversal")}
--                </button>
--              )}
--            </div>
--          ) : category === "all" ? (
--            // 「全部」按左侧分类分段，段内按名称；自定义配置固定在最上面
--            <div className="flex flex-col gap-4">
--              <div className="grid grid-cols-2 gap-2">{customRow}</div>
--              {sectionPresetRows(shown).map((section) => (
--                <section
--                  key={section.group}
--                  aria-labelledby={`preset-section-${section.group}`}
--                  className="flex flex-col gap-2"
--                >
--                  <h3
--                    id={`preset-section-${section.group}`}
--                    className="px-0.5 text-caption font-medium text-fg-2"
--                  >
--                    {t(`providerPreset.group.${section.group}`)}
--                  </h3>
--                  <div className="grid grid-cols-2 gap-2">
--                    {section.items.map(renderRow)}
--                  </div>
--                </section>
-+            ))}
-+      </div>
-+      {modes.length > 0 && (
-+        <div className="space-y-2">
-+          <label className="block space-y-2 text-body text-fg-1">
-+            <span>{t("providerPreset.connectionMethod")}</span>
-+            <select
-+              className="block h-9 w-full rounded-control border border-border bg-surface px-3 text-body"
-+              value={selectedMode}
-+              onChange={(event) => onPick(event.target.value)}
-+              data-connection-method=""
-+            >
-+              <option value="custom">{t("providerPreset.custom")}</option>
-+              {modes.map((entry) => (
-+                <option key={entry.id} value={entry.id}>
-+                  {connectionModeFor(entry.preset) === "account"
-+                    ? t(
-+                        `providerPreset.loginWith.${loginAccountKey(appId, entry.preset)}`,
-+                      )
-+                    : presetDisplayName(entry.preset, t)}
-+                </option>
-               ))}
--            </div>
--          ) : (
--            <div className="grid grid-cols-2 gap-2">
--              {customRow}
--              {shown.map(renderRow)}
--            </div>
--          )}
-+            </select>
-+          </label>
-+          <p className="text-caption text-fg-2">
-+            {t("providerPreset.connectionMethodHint")}
-+          </p>
-         </div>
--      </div>
--    </div>
--  );
--}
--
--/**
-- * 副行：搜索命中某个版本时写「匹配：火山 Coding Plan」；账号登录类写登录说明；
-- * 有多个版本的写「kimi.com · 4 个版本」；其余写域名。
-- */
--function presetRowDetail(
--  appId: AppId | undefined,
--  row: PresetRowItem,
--  hits: number[],
--  t: TFunction,
--): string {
--  const first = row.versions[0];
--  if (hits.length > 0) {
--    const name = presetDisplayName(row.versions[hits[0]].preset, t);
--    return hits.length > 1
--      ? t("providerPreset.matchedVersions", {
--          name,
--          n: hits.length,
--          more: hits.length - 1,
--        })
--      : t("providerPreset.matchedVersion", { name });
--  }
--  if (presetRowGroup(row) === "login") {
--    return t(
--      `providerPreset.loginWith.${loginAccountKey(appId, first.preset)}`,
--    );
--  }
--  if (row.family) {
--    return t("providerPreset.versionCount", {
--      domain: presetDomain(first.preset),
--      n: row.versions.length,
--    });
--  }
--  return presetDomain(first.preset);
--}
--
--function CategoryButton({
--  label,
--  count,
--  active,
--  dim,
--  onClick,
--}: {
--  label: string;
--  count: number;
--  active: boolean;
--  dim: boolean;
--  onClick: () => void;
--}) {
--  return (
--    <button
--      type="button"
--      aria-pressed={active}
--      onClick={onClick}
--      className={cn(
--        "flex h-8 items-center justify-between gap-2 rounded-control px-2 text-start text-body transition-colors",
--        active ? "bg-selected font-medium text-fg-1" : "hover:bg-subtle",
--        !active && (dim ? "text-fg-3" : "text-fg-1"),
-       )}
--    >
--      <span className="truncate">{label}</span>
--      <span className="shrink-0 text-caption tabular-nums text-fg-3">
--        {count}
--      </span>
--    </button>
-+      {onManageUniversalProviders && (
-+        <button
-+          type="button"
-+          onClick={onManageUniversalProviders}
-+          className="self-start text-caption text-fg-1 underline underline-offset-2 hover:text-fg-2"
-+        >
-+          {t("providerPreset.manageUniversal")}
-+        </button>
-+      )}
-+    </div>
-   );
- }
- 
-diff --git a/src/components/providers/forms/hooks/useApiKeyLink.ts b/src/components/providers/forms/hooks/useApiKeyLink.ts
-index 9d98bda..3512b3a 100644
---- a/src/components/providers/forms/hooks/useApiKeyLink.ts
-+++ b/src/components/providers/forms/hooks/useApiKeyLink.ts
-@@ -121,11 +121,10 @@ export function useApiKeyLink({
- 
-   const linkPreset = currentPresetEntry?.preset ?? matchedPreset;
- 
--  // 获取当前供应商的网址（用于 API Key 链接）
--  const getWebsiteUrl = useMemo(() => {
--    if (linkPreset) return presetLinkUrl(linkPreset);
--    return formWebsiteUrl || "";
--  }, [linkPreset, formWebsiteUrl]);
-+  // Only display the URL saved or entered by the user. A matching built-in
-+  // endpoint must never inject a referral link into a custom provider form.
-+  // Keep the metadata lookup above: "google-official" also selects OAuth help.
-+  const getWebsiteUrl = formWebsiteUrl || "";
- 
-   // 提取合作伙伴信息
-   const isPartner = linkPreset?.isPartner ?? false;
-diff --git a/src/components/providers/forms/shared/ApiKeySection.tsx b/src/components/providers/forms/shared/ApiKeySection.tsx
-index 58ab841..d6abae4 100644
---- a/src/components/providers/forms/shared/ApiKeySection.tsx
-+++ b/src/components/providers/forms/shared/ApiKeySection.tsx
-@@ -20,7 +20,7 @@ interface ApiKeySectionProps {
-   required?: boolean;
-   isPartner?: boolean;
-   partnerPromotionKey?: string;
--  /** 输入框下方的说明；有推广语时让位给推广语 */
-+  /** 输入框下方的说明 */
-   hint?: ReactNode;
- }
- 
-@@ -35,7 +35,6 @@ export function ApiKeySection({
-   placeholder,
-   disabled,
-   required = false,
--  partnerPromotionKey,
-   hint,
- }: ApiKeySectionProps) {
-   const { t } = useTranslation();
-@@ -58,13 +57,8 @@ export function ApiKeySection({
-     category !== "cloud_provider";
- 
-   const showLink = shouldShowLink && Boolean(websiteUrl);
--  // 推广语跟着「获取 API Key」走，按输入框说明文字的样式写在框下面（v7 不画推广框）
--  const promotion =
--    showLink && partnerPromotionKey
--      ? t(`providerForm.partnerPromotion.${partnerPromotionKey}`, {
--          defaultValue: "",
--        })
--      : "";
-+  // This distribution displays input help only; promotion metadata may still
-+  // be required by authentication and usage detection elsewhere.
- 
-   return (
-     <ApiKeyInput
-@@ -91,7 +85,7 @@ export function ApiKeySection({
-           </a>
-         ) : null
-       }
--      hint={promotion || hint || undefined}
-+      hint={hint || undefined}
-     />
-   );
- }
-diff --git a/src/components/universal/UniversalProviderFormModal.tsx b/src/components/universal/UniversalProviderFormModal.tsx
-index 6f76dd5..1a2da5a 100644
---- a/src/components/universal/UniversalProviderFormModal.tsx
-+++ b/src/components/universal/UniversalProviderFormModal.tsx
-@@ -159,7 +159,7 @@ model = "${model}"
- model_reasoning_effort = "${reasoningEffort}"
- 
- [model_providers.custom]
--name = "NewAPI"
-+name = "Custom"
- base_url = "${codexBaseUrl}"
- wire_api = "responses"
- requires_openai_auth = true`;
-diff --git a/src/config/cleanProviderPolicy.ts b/src/config/cleanProviderPolicy.ts
-new file mode 100644
-index 0000000..7644a0e
---- /dev/null
-+++ b/src/config/cleanProviderPolicy.ts
-@@ -0,0 +1,71 @@
-+import type { AnyPreset } from "@/components/providers/forms/ProviderPresetSelector";
-+
-+/**
-+ * The clean distribution has no provider directory. These are configuration
-+ * modes with dedicated behavior in the upstream forms, not vendor suggestions.
-+ * Keep the upstream catalogs intact for model metadata and existing user data.
-+ * New vendors are excluded unless they implement an explicitly supported mode.
-+ */
-+export type ConnectionMode = "account" | "plugin" | "cloud";
-+
-+const MANAGED_ACCOUNT_TYPES = new Set([
-+  "github_copilot",
-+  "codex_oauth",
-+  "xai_oauth",
-+]);
-+
-+const NATIVE_ACCOUNT_NAMES = new Set([
-+  "Claude Official",
-+  "Claude Desktop Official",
-+  "OpenAI Official",
-+  "Google Official",
-+  "Grok Official",
-+]);
-+
-+const NATIVE_ACCOUNT_KEYS = new Set([
-+  "kimi-official-account",
-+  "dsh-official-account",
-+  "copilot-official",
-+  "workbuddy-official",
-+]);
-+
-+export function connectionModeFor(preset: AnyPreset): ConnectionMode | null {
-+  const fields = preset as AnyPreset & {
-+    providerType?: string;
-+    providerKey?: string;
-+    settingsConfig?: {
-+      api?: string;
-+      npm?: string;
-+      env?: Record<string, unknown>;
-+    };
-+    templateValues?: Record<string, unknown>;
-+  };
-+
-+  if (
-+    MANAGED_ACCOUNT_TYPES.has(fields.providerType ?? "") ||
-+    (preset.category === "official" &&
-+      (NATIVE_ACCOUNT_NAMES.has(preset.name) ||
-+        NATIVE_ACCOUNT_KEYS.has(fields.providerKey ?? "")))
-+  ) {
-+    return "account";
-+  }
-+
-+  if (preset.category === "omo" || preset.category === "omo-slim") {
-+    return "plugin";
-+  }
-+
-+  const config = fields.settingsConfig;
-+  const template = fields.templateValues;
-+  if (
-+    config?.env?.CLAUDE_CODE_USE_BEDROCK === "1" ||
-+    config?.npm === "@ai-sdk/amazon-bedrock" ||
-+    config?.api === "bedrock-converse-stream" ||
-+    (preset.category === "cloud_provider" &&
-+      (Boolean(template?.AZURE_RESOURCE_NAME) ||
-+        (Boolean(template?.ACCOUNT_ID) && Boolean(template?.GATEWAY_ID))))
-+  ) {
-+    return "cloud";
-+  }
-+
-+  return null;
-+}
-diff --git a/src/config/universalProviderPresets.ts b/src/config/universalProviderPresets.ts
-index 0e1315d..970b3c6 100644
---- a/src/config/universalProviderPresets.ts
-+++ b/src/config/universalProviderPresets.ts
-@@ -59,21 +59,6 @@ const NEWAPI_DEFAULT_MODELS: UniversalProviderModels = {
-  * 统一供应商预设列表
-  */
- export const universalProviderPresets: UniversalProviderPreset[] = [
--  {
--    name: "NewAPI",
--    providerType: "newapi",
--    defaultApps: {
--      claude: true,
--      codex: true,
--      gemini: true,
--    },
--    defaultModels: NEWAPI_DEFAULT_MODELS,
--    websiteUrl: "https://www.newapi.pro",
--    icon: "newapi",
--    iconColor: "#00A67E",
--    description:
--      "NewAPI 是一个可自部署的 API 网关，支持 Anthropic、OpenAI、Gemini 等多种协议",
--  },
-   {
-     name: "自定义网关",
-     providerType: "custom_gateway",
-diff --git a/src/i18n/locales/en.json b/src/i18n/locales/en.json
-index 0b6e8a3..bef266b 100644
---- a/src/i18n/locales/en.json
-+++ b/src/i18n/locales/en.json
-@@ -2306,6 +2306,8 @@
-     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
-   },
-   "providerPreset": {
-+    "connectionMethod": "Connection method",
-+    "connectionMethodHint": "Choose an account, authentication method or plugin when needed.",
-     "label": "Provider Preset",
-     "custom": "Custom Configuration",
-     "other": "Other",
-diff --git a/src/i18n/locales/ja.json b/src/i18n/locales/ja.json
-index b225edc..857942e 100644
---- a/src/i18n/locales/ja.json
-+++ b/src/i18n/locales/ja.json
-@@ -2306,6 +2306,8 @@
-     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
-   },
-   "providerPreset": {
-+    "connectionMethod": "接続方法",
-+    "connectionMethodHint": "アカウント、認証方式、プラグインを使う場合はここで選択します。",
-     "label": "プロバイダータイプ",
-     "custom": "カスタム設定",
-     "other": "その他",
-diff --git a/src/i18n/locales/tr.json b/src/i18n/locales/tr.json
-index 8e41841..7dfa6ed 100644
---- a/src/i18n/locales/tr.json
-+++ b/src/i18n/locales/tr.json
-@@ -2237,6 +2237,8 @@
-     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
-   },
-   "providerPreset": {
-+    "connectionMethod": "Bağlantı yöntemi",
-+    "connectionMethodHint": "Gerektiğinde bir hesap, kimlik doğrulama yöntemi veya eklenti seçin.",
-     "label": "Sağlayıcı Ön Ayarı",
-     "custom": "Özel Yapılandırma",
-     "other": "Diğer",
-diff --git a/src/i18n/locales/zh-TW.json b/src/i18n/locales/zh-TW.json
-index 87a0321..e62e5e7 100644
---- a/src/i18n/locales/zh-TW.json
-+++ b/src/i18n/locales/zh-TW.json
-@@ -2306,6 +2306,8 @@
-     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
-   },
-   "providerPreset": {
-+    "connectionMethod": "連線方式",
-+    "connectionMethodHint": "需要帳號登入、特殊驗證或外掛設定時，在這裡選擇。",
-     "label": "預設供應商",
-     "custom": "自訂設定",
-     "other": "其他",
-diff --git a/src/i18n/locales/zh.json b/src/i18n/locales/zh.json
-index b11b3a0..187a56d 100644
---- a/src/i18n/locales/zh.json
-+++ b/src/i18n/locales/zh.json
-@@ -2306,6 +2306,8 @@
-     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
-   },
-   "providerPreset": {
-+    "connectionMethod": "连接方式",
-+    "connectionMethodHint": "需要账号登录、特殊认证或插件配置时，在这里选择。",
-     "label": "预设供应商",
-     "custom": "自定义配置",
-     "other": "其他",
-diff --git a/tests/components/CleanProviders.test.tsx b/tests/components/CleanProviders.test.tsx
-new file mode 100644
-index 0000000..5e338f3
---- /dev/null
-+++ b/tests/components/CleanProviders.test.tsx
-@@ -0,0 +1,217 @@
-+import { render, renderHook, screen } from "@testing-library/react";
-+import userEvent from "@testing-library/user-event";
-+import { describe, expect, it, vi } from "vitest";
-+import i18n from "i18next";
-+import { providerPresets } from "@/config/claudeProviderPresets";
-+import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPresets";
-+import { codexProviderPresets } from "@/config/codexProviderPresets";
-+import { geminiProviderPresets } from "@/config/geminiProviderPresets";
-+import { grokBuildProviderPresets } from "@/config/grokBuildProviderPresets";
-+import { opencodeProviderPresets } from "@/config/opencodeProviderPresets";
-+import { openclawProviderPresets } from "@/config/openclawProviderPresets";
-+import { hermesProviderPresets } from "@/config/hermesProviderPresets";
-+import { piProviderPresets } from "@/config/piProviderPresets";
-+import { ompProviderPresets } from "@/config/ompProviderPresets";
-+import { mcodeProviderPresets } from "@/config/mcodeProviderPresets";
-+import { dshProviderPresets } from "@/config/dshProviderPresets";
-+import { kimiProviderPresets } from "@/config/kimiProviderPresets";
-+import { copilotProviderPresets } from "@/config/copilotProviderPresets";
-+import { workbuddyProviderPresets } from "@/config/workbuddyProviderPresets";
-+import { universalProviderPresets } from "@/config/universalProviderPresets";
-+import {
-+  ProviderPresetSelector,
-+  type AnyPreset,
-+} from "@/components/providers/forms/ProviderPresetSelector";
-+import { ApiKeySection } from "@/components/providers/forms/shared/ApiKeySection";
-+import { useApiKeyLink } from "@/components/providers/forms/hooks/useApiKeyLink";
-+
-+const catalogs: Array<[string, AnyPreset[]]> = [
-+  ["claude", providerPresets],
-+  ["claude-desktop", claudeDesktopProviderPresets],
-+  ["codex", codexProviderPresets],
-+  ["gemini", geminiProviderPresets],
-+  ["agy", geminiProviderPresets],
-+  ["grokbuild", grokBuildProviderPresets],
-+  ["opencode", opencodeProviderPresets],
-+  ["openclaw", openclawProviderPresets],
-+  ["hermes", hermesProviderPresets],
-+  ["pi", piProviderPresets],
-+  ["omp", ompProviderPresets],
-+  ["mcode", mcodeProviderPresets],
-+  ["dsh", dshProviderPresets],
-+  ["kimi", kimiProviderPresets],
-+  ["copilot", copilotProviderPresets],
-+  ["workbuddy", workbuddyProviderPresets],
-+];
-+
-+describe("clean provider picker", () => {
-+  it.each(catalogs)(
-+    "%s has a working custom action and no provider rows",
-+    async (_app, presets) => {
-+      const choose = vi.fn();
-+      const user = userEvent.setup();
-+      render(
-+        <ProviderPresetSelector
-+          selectedPresetId="custom"
-+          presetEntries={presets.map((preset, index) => ({
-+            id: String(index),
-+            preset,
-+          }))}
-+          onPresetChange={choose}
-+        />,
-+      );
-+
-+      // Only the custom configuration is a card. Functional authentication
-+      // options are separate select options, with no provider advertising links.
-+      expect(screen.getAllByRole("button")).toHaveLength(1);
-+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
-+      await user.click(
-+        screen.getByRole("button", { name: "providerPreset.custom" }),
-+      );
-+      expect(choose).toHaveBeenCalledWith("custom");
-+    },
-+  );
-+
-+  it("keeps cross-client OAuth choices wired to their original IDs", async () => {
-+    const choose = vi.fn();
-+    const user = userEvent.setup();
-+    const index = providerPresets.findIndex(
-+      (preset) => preset.providerType === "codex_oauth",
-+    );
-+    expect(index).toBeGreaterThanOrEqual(0);
-+    render(
-+      <ProviderPresetSelector
-+        selectedPresetId="custom"
-+        presetEntries={providerPresets.map((preset, i) => ({
-+          id: `claude-${i}`,
-+          preset,
-+        }))}
-+        onPresetChange={choose}
-+      />,
-+    );
-+    await user.selectOptions(screen.getByRole("combobox"), `claude-${index}`);
-+    expect(choose).toHaveBeenCalledWith(`claude-${index}`);
-+  });
-+
-+  it("does not admit newly added ordinary vendors into connection choices", () => {
-+    render(
-+      <ProviderPresetSelector
-+        selectedPresetId="custom"
-+        presetEntries={[
-+          {
-+            id: "new-vendor",
-+            preset: {
-+              name: "New Official Vendor",
-+              category: "official",
-+              websiteUrl: "https://vendor.example",
-+              settingsConfig: {},
-+            },
-+          },
-+          {
-+            id: "new-cloud",
-+            preset: {
-+              name: "New Cloud Vendor",
-+              category: "cloud_provider",
-+              websiteUrl: "https://cloud.example",
-+              settingsConfig: {},
-+            },
-+          },
-+        ]}
-+        onPresetChange={vi.fn()}
-+      />,
-+    );
-+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-+    expect(screen.queryByText(/New .* Vendor/)).not.toBeInTheDocument();
-+  });
-+
-+  it("keeps the custom universal gateway without a named vendor template", async () => {
-+    const openUniversal = vi.fn();
-+    const user = userEvent.setup();
-+    render(
-+      <ProviderPresetSelector
-+        selectedPresetId="custom"
-+        presetEntries={[]}
-+        onPresetChange={vi.fn()}
-+        onUniversalPresetSelect={openUniversal}
-+      />,
-+    );
-+    expect(screen.queryByText("NewAPI")).not.toBeInTheDocument();
-+    await user.click(screen.getByRole("button", { name: "自定义网关" }));
-+    expect(openUniversal).toHaveBeenCalledWith(
-+      expect.objectContaining({ isCustomTemplate: true }),
-+    );
-+    expect(universalProviderPresets).toHaveLength(1);
-+  });
-+});
-+
-+describe("clean provider links and help", () => {
-+  it("does not inject an affiliate URL for an imported endpoint", () => {
-+    const { result } = renderHook(() =>
-+      useApiKeyLink({
-+        appId: "claude",
-+        category: "third_party",
-+        selectedPresetId: "custom",
-+        formBaseUrl: "https://vendor.example/v1",
-+        formWebsiteUrl: "https://my-saved-url.example",
-+        presetEntries: [
-+          {
-+            id: "vendor",
-+            preset: {
-+              name: "Advertised vendor",
-+              category: "third_party",
-+              websiteUrl: "https://vendor.example",
-+              apiKeyUrl: "https://vendor.example/register?ref=advertiser",
-+              partnerPromotionKey: "advertiser",
-+              settingsConfig: {
-+                env: { ANTHROPIC_BASE_URL: "https://vendor.example/v1" },
-+              },
-+            },
-+          },
-+        ],
-+      }),
-+    );
-+    expect(result.current.websiteUrl).toBe("https://my-saved-url.example");
-+  });
-+
-+  it("retains the Google OAuth marker needed by the official authentication form", () => {
-+    const { result } = renderHook(() =>
-+      useApiKeyLink({
-+        appId: "gemini",
-+        category: "official",
-+        selectedPresetId: "google-account",
-+        formWebsiteUrl: "",
-+        presetEntries: [
-+          { id: "google-account", preset: geminiProviderPresets[0] },
-+        ],
-+      }),
-+    );
-+    expect(result.current.partnerPromotionKey).toBe("google-official");
-+  });
-+
-+  it("shows functional API-key help without promotion copy", () => {
-+    i18n.addResource(
-+      "zh",
-+      "translation",
-+      "providerForm.partnerPromotion.kimi",
-+      "This is sponsor text",
-+    );
-+    render(
-+      <ApiKeySection
-+        value=""
-+        onChange={vi.fn()}
-+        shouldShowLink={true}
-+        websiteUrl="https://user-entered.example/keys"
-+        partnerPromotionKey="kimi"
-+        hint="Keep this functional input hint"
-+      />,
-+    );
-+    expect(
-+      screen.getByText("Keep this functional input hint"),
-+    ).toBeInTheDocument();
-+    expect(screen.queryByText("This is sponsor text")).not.toBeInTheDocument();
-+    expect(screen.getByRole("link")).toHaveAttribute(
-+      "href",
-+      "https://user-entered.example/keys",
-+    );
-+  });
-+});
 diff --git a/src-tauri/src/commands/provider.rs b/src-tauri/src/commands/provider.rs
 index 918e65b..42580f5 100644
 --- a/src-tauri/src/commands/provider.rs
@@ -1395,6 +447,1788 @@ index 3cc8908..f19123c 100644
  
      let providers_before = state
          .db
+diff --git a/src/components/providers/forms/CopilotProviderForm.tsx b/src/components/providers/forms/CopilotProviderForm.tsx
+index 52d2929..21d1dd7 100644
+--- a/src/components/providers/forms/CopilotProviderForm.tsx
++++ b/src/components/providers/forms/CopilotProviderForm.tsx
+@@ -294,11 +294,9 @@ export function CopilotProviderForm({
+   const { t } = useTranslation();
+   const isEdit = Boolean(initialData);
+   const initialConfig = initialData?.settingsConfig;
+-  const [presetId, setPresetId] = useState(
+-    isEdit ? "custom" : COPILOT_OFFICIAL_PRESET_ID,
+-  );
++  const [presetId, setPresetId] = useState("custom");
+   const [category, setCategory] = useState<ProviderCategory>(
+-    initialData?.category ?? (isEdit ? "custom" : "official"),
++    initialData?.category ?? "custom",
+   );
+   // 编辑时按配置认（没有 provider 节点的旧卡也是官方卡），新建时按选的预设
+   const isOfficial = isEdit
+@@ -350,12 +348,10 @@ export function CopilotProviderForm({
+ 
+   const form = useForm<ProviderFormData>({
+     defaultValues: {
+-      name: initialData?.name ?? (isEdit ? "" : copilotOfficialPreset.name),
++      name: initialData?.name ?? "",
+       notes: initialData?.notes ?? "",
+-      websiteUrl:
+-        initialData?.websiteUrl ??
+-        (isEdit ? "" : copilotOfficialPreset.websiteUrl),
+-      icon: initialData?.icon ?? (isEdit ? "" : "githubcopilot"),
++      websiteUrl: initialData?.websiteUrl ?? "",
++      icon: initialData?.icon ?? "",
+       iconColor: initialData?.iconColor ?? "",
+       settingsConfig: "",
+     },
+diff --git a/src/components/providers/forms/ProviderForm.tsx b/src/components/providers/forms/ProviderForm.tsx
+index 2296a8c..a2c36e3 100644
+--- a/src/components/providers/forms/ProviderForm.tsx
++++ b/src/components/providers/forms/ProviderForm.tsx
+@@ -1,3 +1,4 @@
++import { ownedProviderDetails } from "@/config/ownedProviderPresets";
+ import {
+   useEffect,
+   useMemo,
+@@ -2419,6 +2420,10 @@ function ProviderFormFull({
+       }
+ 
+       opencodeForm.resetOpencodeState(config);
++      const owned = ownedProviderDetails(preset);
++      if (owned?.providerKey) {
++        opencodeForm.setOpencodeProviderKey(owned.providerKey);
++      }
+ 
+       form.reset({
+         name: preset.nameKey ? t(preset.nameKey) : preset.name,
+@@ -2445,6 +2450,10 @@ function ProviderFormFull({
+       });
+ 
+       openclawForm.resetOpenclawState(config);
++      const owned = ownedProviderDetails(preset);
++      if (owned?.providerKey) {
++        openclawForm.setOpenclawProviderKey(owned.providerKey);
++      }
+ 
+       // Update form fields
+       form.reset({
+diff --git a/src/components/providers/forms/ProviderPresetSelector.tsx b/src/components/providers/forms/ProviderPresetSelector.tsx
+index af5bc82..16ef858 100644
+--- a/src/components/providers/forms/ProviderPresetSelector.tsx
++++ b/src/components/providers/forms/ProviderPresetSelector.tsx
+@@ -1,13 +1,13 @@
+-import { useEffect, useMemo, useRef, useState } from "react";
++import { useEffect, useRef, useState } from "react";
+ import { createPortal } from "react-dom";
+ import { useTranslation } from "react-i18next";
+-import type { TFunction } from "i18next";
+-import { Search, SlidersHorizontal, X, Zap } from "lucide-react";
++import { SlidersHorizontal, Zap } from "lucide-react";
+ import { Button } from "@/components/ui/button";
+-import { Input } from "@/components/ui/input";
++import { connectionModeFor } from "@/config/cleanProviderPolicy";
+ import { ClaudeIcon, CodexIcon, GeminiIcon } from "@/components/BrandIcons";
+ import { ProviderIconBox } from "@/components/ProviderIconBox";
+ import type { ProviderPreset } from "@/config/claudeProviderPresets";
++import { ownedProviderDetails } from "@/config/ownedProviderPresets";
+ import type { CodexProviderPreset } from "@/config/codexProviderPresets";
+ import type { GeminiProviderPreset } from "@/config/geminiProviderPresets";
+ import type { ClaudeDesktopProviderPreset } from "@/config/claudeDesktopProviderPresets";
+@@ -38,29 +38,22 @@ import {
+ } from "@/components/ui/select";
+ import { ConfirmDialog } from "@/components/ConfirmDialog";
+ import {
+-  PRESET_GROUP_ORDER,
+   familyDisplayName,
+   groupPresetRows,
+   loginAccountKey,
+   matchPresetRow,
+   presetDisplayName,
+   presetDomain,
+-  presetGroup,
+   presetMatches,
+   presetNeedsRouting,
+   presetPlanLabel,
+   presetRegionLabel,
+-  presetRowGroup,
+-  presetRowName,
+-  presetRowNeedsRouting,
+   presetVersionLabel,
+   presetVersionLayout,
+   presetVersionShortLabel,
+   presetVersions,
+-  sectionPresetRows,
+   sortPresetRowsByName,
+   sortPresetsByName,
+-  type PresetGroup,
+   type PresetRowItem,
+ } from "./presetGroups";
+ 
+@@ -129,8 +122,6 @@ export function getVisiblePresetRows(
+   return sortPresetRowsByName(found, t);
+ }
+ 
+-type PickerCategory = "all" | PresetGroup | "universal";
+-
+ interface ProviderPresetSelectorProps {
+   selectedPresetId: string | null;
+   presetEntries: PresetEntry[];
+@@ -203,6 +194,7 @@ export function ProviderPresetSelector({
+             onVersionChange={onPresetChange}
+           />
+         )}
++        <OwnedProviderHint preset={entry?.preset} />
+       </div>
+     );
+   }
+@@ -335,6 +327,7 @@ function PresetBar({
+           onVersionChange={onVersionChange}
+         />
+       )}
++      <OwnedProviderHint preset={entry?.preset} />
+     </div>
+   );
+ }
+@@ -554,326 +547,107 @@ function PresetPicker({
+   onManageUniversalProviders,
+ }: PresetPickerProps) {
+   const { t } = useTranslation();
+-  const [query, setQuery] = useState("");
+-  const [category, setCategory] = useState<PickerCategory>("all");
+-  const searchRef = useRef<HTMLInputElement>(null);
+-
+-  useEffect(() => {
+-    const frame = requestAnimationFrame(() => searchRef.current?.focus());
+-    return () => cancelAnimationFrame(frame);
+-  }, []);
+-
+-  // ⌘F / Ctrl+F 回到搜索框（捕获阶段，别让后面供应商列表的同名快捷键接到）
+-  useEffect(() => {
+-    const onKeyDown = (event: KeyboardEvent) => {
+-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+-        event.preventDefault();
+-        event.stopPropagation();
+-        searchRef.current?.focus();
+-      }
+-    };
+-    globalThis.addEventListener("keydown", onKeyDown, true);
+-    return () => globalThis.removeEventListener("keydown", onKeyDown, true);
+-  }, []);
+-
+-  const groups = useMemo(() => {
+-    const byGroup = new Map<PresetGroup, PresetEntry[]>();
+-    for (const entry of entries) {
+-      const group = presetGroup(entry.preset);
+-      byGroup.set(group, [...(byGroup.get(group) ?? []), entry]);
+-    }
+-    return byGroup;
+-  }, [entries]);
+-
+-  // 同一家的多个版本合成一行，数量也按行数算
+-  const matching = useMemo(
+-    () => getVisiblePresetRows(entries, { query, t }),
+-    [entries, query, t],
+-  );
+-  const matchingUniversal = useMemo(
+-    () =>
+-      onUniversalPresetSelect
+-        ? universalProviderPresets.filter((preset) =>
+-            preset.name.toLowerCase().includes(query.trim().toLowerCase()),
+-          )
+-        : [],
+-    [onUniversalPresetSelect, query],
+-  );
+-
+-  const countFor = (key: PickerCategory) => {
+-    if (key === "universal") return matchingUniversal.length;
+-    // 「自定义配置」固定在第一行，不计入数量
+-    if (key === "all") return matching.length;
+-    return matching.filter((item) => presetRowGroup(item.row) === key).length;
+-  };
+-
+-  const shown =
+-    category === "all"
+-      ? matching
+-      : category === "universal"
+-        ? []
+-        : matching.filter((item) => presetRowGroup(item.row) === category);
+-
+-  const navItems: PickerCategory[] = [
+-    "all",
+-    ...PRESET_GROUP_ORDER.filter((group) => groups.has(group)),
+-  ];
+-  const searching = query.trim().length > 0;
+-
+-  const customRow = (
+-    <PresetRow
+-      icon={<PresetIconBox />}
+-      name={t("providerPreset.custom")}
+-      detail={t("providerPreset.customDetail")}
+-      selected={selectedPresetId === "custom"}
+-      onClick={() => onPick("custom")}
+-    />
+-  );
+-  const renderRow = ({ row, hits }: VisiblePresetRow) => {
+-    const first = row.versions[0];
+-    // 搜索命中某个版本时选中那个版本，否则选第一个
+-    const target = row.versions[hits[0] ?? 0];
+-    return (
+-      <PresetRow
+-        key={row.key}
+-        icon={<PresetIconBox preset={first.preset} />}
+-        name={presetRowName(row, t)}
+-        detail={presetRowDetail(appId, row, hits, t)}
+-        needsRoute={presetRowNeedsRouting(appId, row)}
+-        selected={row.versions.some((entry) => entry.id === selectedPresetId)}
+-        onClick={() => onPick(target.id)}
+-      />
+-    );
+-  };
+-
+-  const nothing =
+-    searching &&
+-    matching.length === 0 &&
+-    (category !== "universal" || matchingUniversal.length === 0);
++  // Only this distribution's explicitly registered services are selectable.
++  // Dedicated account / SDK / plugin modes remain available separately.
++  const owned = entries.filter((entry) => ownedProviderDetails(entry.preset));
++  const modes = entries.filter((entry) => connectionModeFor(entry.preset));
++  const selectedMode = modes.some((entry) => entry.id === selectedPresetId)
++    ? selectedPresetId!
++    : "custom";
+ 
+   return (
+-    <div className="flex h-full min-h-0 flex-col">
+-      <div className="shrink-0 px-6 pb-3 pt-4">
+-        <div className="relative">
+-          <Search
+-            className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-3"
+-            strokeWidth={1.5}
+-          />
+-          <Input
+-            ref={searchRef}
+-            value={query}
+-            onChange={(event) => setQuery(event.target.value)}
+-            onKeyDown={(event) => {
+-              if (event.key === "Escape" && query) {
+-                event.preventDefault();
+-                setQuery("");
+-              }
+-            }}
+-            placeholder={t("providerPreset.searchPlaceholder")}
+-            aria-label={t("providerPreset.searchAriaLabel")}
+-            className="pe-9 ps-9"
+-          />
+-          {query && (
+-            <button
+-              type="button"
+-              onClick={() => {
+-                setQuery("");
+-                searchRef.current?.focus();
+-              }}
+-              aria-label={t("providerPreset.clearSearch")}
+-              className="absolute end-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-control text-fg-3 hover:bg-subtle hover:text-fg-1"
+-            >
+-              <X className="h-3.5 w-3.5" />
+-            </button>
+-          )}
+-        </div>
++    <div className="flex h-full min-h-0 flex-col gap-5 overflow-y-auto px-6 py-4">
++      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
++        <PresetRow
++          icon={<PresetIconBox />}
++          name={t("providerPreset.custom")}
++          detail={t("providerPreset.customDetail")}
++          selected={selectedPresetId === "custom"}
++          onClick={() => onPick("custom")}
++        />
++        {onUniversalPresetSelect &&
++          universalProviderPresets
++            .filter((preset) => preset.isCustomTemplate)
++            .map((preset) => (
++              <PresetRow
++                key={preset.providerType}
++                icon={<PresetIconBox />}
++                name={preset.name}
++                detail={t("providerPreset.universalDetail")}
++                onClick={() => onUniversalPresetSelect(preset)}
++              />
++            ))}
+       </div>
+-
+-      <div className="flex min-h-0 flex-1 gap-4 px-6 pb-4">
+-        <div
+-          role="group"
+-          aria-label={t("providerPreset.categoriesLabel")}
+-          className="flex w-[168px] shrink-0 flex-col gap-0.5 overflow-y-auto"
++      {owned.length > 0 && (
++        <section
++          className="space-y-2"
++          aria-label={t("providerPreset.owned.title")}
+         >
+-          {navItems.map((key) => (
+-            <CategoryButton
+-              key={key}
+-              label={t(`providerPreset.group.${key}`)}
+-              count={countFor(key)}
+-              active={category === key}
+-              dim={searching && countFor(key) === 0}
+-              onClick={() => setCategory(key)}
+-            />
+-          ))}
+-          {onUniversalPresetSelect && (
+-            <>
+-              <div className="my-2 border-t border-border" />
+-              <div className="px-2 pb-1 text-badge text-fg-3">
+-                {t("providerPreset.crossApp")}
+-              </div>
+-              <CategoryButton
+-                label={t("providerPreset.group.universal")}
+-                count={countFor("universal")}
+-                active={category === "universal"}
+-                dim={searching && countFor("universal") === 0}
+-                onClick={() => setCategory("universal")}
++          <h3 className="text-body text-fg-1">
++            {t("providerPreset.owned.title")}
++          </h3>
++          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
++            {owned.map((entry) => (
++              <PresetRow
++                key={entry.id}
++                icon={<PresetIconBox preset={entry.preset} />}
++                name={presetDisplayName(entry.preset, t)}
++                detail={t(ownedProviderDetails(entry.preset)!.hintKey)}
++                selected={entry.id === selectedPresetId}
++                onClick={() => onPick(entry.id)}
+               />
+-            </>
+-          )}
+-        </div>
+-
+-        <div className="min-w-0 flex-1 overflow-y-auto">
+-          {category !== "all" && (
+-            <p className="mb-2 text-caption text-fg-2">
+-              {t(`providerPreset.groupHint.${category}`)}
+-            </p>
+-          )}
+-
+-          {nothing ? (
+-            <div className="flex flex-col items-center gap-2 py-12 text-center">
+-              <p className="text-body text-fg-1">
+-                {t("providerPreset.noResults", { query: query.trim() })}
+-              </p>
+-              <p className="text-caption text-fg-2">
+-                {t("providerPreset.noResultsHint")}
+-              </p>
+-              <Button
+-                type="button"
+-                variant="neutral"
+-                size="compact"
+-                className="mt-1"
+-                onClick={() => onPick("custom")}
+-              >
+-                {t("providerPreset.useCustom")}
+-              </Button>
+-            </div>
+-          ) : category === "universal" ? (
+-            <div className="grid grid-cols-2 gap-2">
+-              {matchingUniversal.map((preset) => (
+-                <PresetRow
+-                  key={`universal-${preset.providerType}`}
+-                  icon={
+-                    <ProviderIconBox
+-                      icon={preset.icon}
+-                      name={preset.name}
+-                      className="bg-surface"
+-                      iconClassName="shrink-0 text-fg-1"
+-                    />
+-                  }
+-                  name={preset.name}
+-                  detail={t("providerPreset.universalDetail")}
+-                  onClick={() => onUniversalPresetSelect?.(preset)}
+-                />
+-              ))}
+-              {onManageUniversalProviders && (
+-                <button
+-                  type="button"
+-                  onClick={onManageUniversalProviders}
+-                  className="col-span-2 justify-self-start text-caption text-fg-1 underline underline-offset-2 hover:text-fg-2"
+-                >
+-                  {t("providerPreset.manageUniversal")}
+-                </button>
+-              )}
+-            </div>
+-          ) : category === "all" ? (
+-            // 「全部」按左侧分类分段，段内按名称；自定义配置固定在最上面
+-            <div className="flex flex-col gap-4">
+-              <div className="grid grid-cols-2 gap-2">{customRow}</div>
+-              {sectionPresetRows(shown).map((section) => (
+-                <section
+-                  key={section.group}
+-                  aria-labelledby={`preset-section-${section.group}`}
+-                  className="flex flex-col gap-2"
+-                >
+-                  <h3
+-                    id={`preset-section-${section.group}`}
+-                    className="px-0.5 text-caption font-medium text-fg-2"
+-                  >
+-                    {t(`providerPreset.group.${section.group}`)}
+-                  </h3>
+-                  <div className="grid grid-cols-2 gap-2">
+-                    {section.items.map(renderRow)}
+-                  </div>
+-                </section>
++            ))}
++          </div>
++        </section>
++      )}
++      {modes.length > 0 && (
++        <div className="space-y-2">
++          <label className="block space-y-2 text-body text-fg-1">
++            <span>{t("providerPreset.connectionMethod")}</span>
++            <select
++              className="block h-9 w-full rounded-control border border-border bg-surface px-3 text-body"
++              value={selectedMode}
++              onChange={(event) => onPick(event.target.value)}
++              data-connection-method=""
++            >
++              <option value="custom">{t("providerPreset.custom")}</option>
++              {modes.map((entry) => (
++                <option key={entry.id} value={entry.id}>
++                  {connectionModeFor(entry.preset) === "account"
++                    ? t(
++                        `providerPreset.loginWith.${loginAccountKey(appId, entry.preset)}`,
++                      )
++                    : presetDisplayName(entry.preset, t)}
++                </option>
+               ))}
+-            </div>
+-          ) : (
+-            <div className="grid grid-cols-2 gap-2">
+-              {customRow}
+-              {shown.map(renderRow)}
+-            </div>
+-          )}
++            </select>
++          </label>
++          <p className="text-caption text-fg-2">
++            {t("providerPreset.connectionMethodHint")}
++          </p>
+         </div>
+-      </div>
++      )}
++      {onManageUniversalProviders && (
++        <button
++          type="button"
++          onClick={onManageUniversalProviders}
++          className="self-start text-caption text-fg-1 underline underline-offset-2 hover:text-fg-2"
++        >
++          {t("providerPreset.manageUniversal")}
++        </button>
++      )}
+     </div>
+   );
+ }
+ 
+-/**
+- * 副行：搜索命中某个版本时写「匹配：火山 Coding Plan」；账号登录类写登录说明；
+- * 有多个版本的写「kimi.com · 4 个版本」；其余写域名。
+- */
+-function presetRowDetail(
+-  appId: AppId | undefined,
+-  row: PresetRowItem,
+-  hits: number[],
+-  t: TFunction,
+-): string {
+-  const first = row.versions[0];
+-  if (hits.length > 0) {
+-    const name = presetDisplayName(row.versions[hits[0]].preset, t);
+-    return hits.length > 1
+-      ? t("providerPreset.matchedVersions", {
+-          name,
+-          n: hits.length,
+-          more: hits.length - 1,
+-        })
+-      : t("providerPreset.matchedVersion", { name });
+-  }
+-  if (presetRowGroup(row) === "login") {
+-    return t(
+-      `providerPreset.loginWith.${loginAccountKey(appId, first.preset)}`,
+-    );
+-  }
+-  if (row.family) {
+-    return t("providerPreset.versionCount", {
+-      domain: presetDomain(first.preset),
+-      n: row.versions.length,
+-    });
+-  }
+-  return presetDomain(first.preset);
+-}
+-
+-function CategoryButton({
+-  label,
+-  count,
+-  active,
+-  dim,
+-  onClick,
+-}: {
+-  label: string;
+-  count: number;
+-  active: boolean;
+-  dim: boolean;
+-  onClick: () => void;
+-}) {
+-  return (
+-    <button
+-      type="button"
+-      aria-pressed={active}
+-      onClick={onClick}
+-      className={cn(
+-        "flex h-8 items-center justify-between gap-2 rounded-control px-2 text-start text-body transition-colors",
+-        active ? "bg-selected font-medium text-fg-1" : "hover:bg-subtle",
+-        !active && (dim ? "text-fg-3" : "text-fg-1"),
+-      )}
+-    >
+-      <span className="truncate">{label}</span>
+-      <span className="shrink-0 text-caption tabular-nums text-fg-3">
+-        {count}
+-      </span>
+-    </button>
+-  );
++function OwnedProviderHint({ preset }: { preset?: AnyPreset }) {
++  const { t } = useTranslation();
++  const owned = preset && ownedProviderDetails(preset);
++  return owned ? (
++    <p className="text-caption text-fg-2" data-owned-provider-hint="">
++      {t(owned.hintKey)}
++    </p>
++  ) : null;
+ }
+ 
+ function PresetRow({
+diff --git a/src/components/providers/forms/hooks/useApiKeyLink.ts b/src/components/providers/forms/hooks/useApiKeyLink.ts
+index 9d98bda..3512b3a 100644
+--- a/src/components/providers/forms/hooks/useApiKeyLink.ts
++++ b/src/components/providers/forms/hooks/useApiKeyLink.ts
+@@ -121,11 +121,10 @@ export function useApiKeyLink({
+ 
+   const linkPreset = currentPresetEntry?.preset ?? matchedPreset;
+ 
+-  // 获取当前供应商的网址（用于 API Key 链接）
+-  const getWebsiteUrl = useMemo(() => {
+-    if (linkPreset) return presetLinkUrl(linkPreset);
+-    return formWebsiteUrl || "";
+-  }, [linkPreset, formWebsiteUrl]);
++  // Only display the URL saved or entered by the user. A matching built-in
++  // endpoint must never inject a referral link into a custom provider form.
++  // Keep the metadata lookup above: "google-official" also selects OAuth help.
++  const getWebsiteUrl = formWebsiteUrl || "";
+ 
+   // 提取合作伙伴信息
+   const isPartner = linkPreset?.isPartner ?? false;
+diff --git a/src/components/providers/forms/shared/ApiKeySection.tsx b/src/components/providers/forms/shared/ApiKeySection.tsx
+index 58ab841..d6abae4 100644
+--- a/src/components/providers/forms/shared/ApiKeySection.tsx
++++ b/src/components/providers/forms/shared/ApiKeySection.tsx
+@@ -20,7 +20,7 @@ interface ApiKeySectionProps {
+   required?: boolean;
+   isPartner?: boolean;
+   partnerPromotionKey?: string;
+-  /** 输入框下方的说明；有推广语时让位给推广语 */
++  /** 输入框下方的说明 */
+   hint?: ReactNode;
+ }
+ 
+@@ -35,7 +35,6 @@ export function ApiKeySection({
+   placeholder,
+   disabled,
+   required = false,
+-  partnerPromotionKey,
+   hint,
+ }: ApiKeySectionProps) {
+   const { t } = useTranslation();
+@@ -58,13 +57,8 @@ export function ApiKeySection({
+     category !== "cloud_provider";
+ 
+   const showLink = shouldShowLink && Boolean(websiteUrl);
+-  // 推广语跟着「获取 API Key」走，按输入框说明文字的样式写在框下面（v7 不画推广框）
+-  const promotion =
+-    showLink && partnerPromotionKey
+-      ? t(`providerForm.partnerPromotion.${partnerPromotionKey}`, {
+-          defaultValue: "",
+-        })
+-      : "";
++  // This distribution displays input help only; promotion metadata may still
++  // be required by authentication and usage detection elsewhere.
+ 
+   return (
+     <ApiKeyInput
+@@ -91,7 +85,7 @@ export function ApiKeySection({
+           </a>
+         ) : null
+       }
+-      hint={promotion || hint || undefined}
++      hint={hint || undefined}
+     />
+   );
+ }
+diff --git a/src/components/universal/UniversalProviderFormModal.tsx b/src/components/universal/UniversalProviderFormModal.tsx
+index 6f76dd5..1a2da5a 100644
+--- a/src/components/universal/UniversalProviderFormModal.tsx
++++ b/src/components/universal/UniversalProviderFormModal.tsx
+@@ -159,7 +159,7 @@ model = "${model}"
+ model_reasoning_effort = "${reasoningEffort}"
+ 
+ [model_providers.custom]
+-name = "NewAPI"
++name = "Custom"
+ base_url = "${codexBaseUrl}"
+ wire_api = "responses"
+ requires_openai_auth = true`;
+diff --git a/src/config/claudeDesktopProviderPresets.ts b/src/config/claudeDesktopProviderPresets.ts
+index 2ae0dd5..961d97c 100644
+--- a/src/config/claudeDesktopProviderPresets.ts
++++ b/src/config/claudeDesktopProviderPresets.ts
+@@ -1,3 +1,4 @@
++import { ownedClaudeDesktopPresets } from "./ownedProviderPresets";
+ /**
+  * Claude Desktop 预设供应商配置模板
+  *
+@@ -2610,4 +2611,5 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
+     ),
+     icon: "aicoming",
+   },
++  ...ownedClaudeDesktopPresets,
+ ];
+diff --git a/src/config/claudeProviderPresets.ts b/src/config/claudeProviderPresets.ts
+index fea3b08..72bf37a 100644
+--- a/src/config/claudeProviderPresets.ts
++++ b/src/config/claudeProviderPresets.ts
+@@ -1,3 +1,4 @@
++import { ownedClaudePresets } from "./ownedProviderPresets";
+ /**
+  * 预设供应商配置模板
+  */
+@@ -3243,4 +3244,5 @@ export const providerPresets: ProviderPreset[] = [
+     icon: "genesis",
+     apiFormat: "openai_chat",
+   },
++  ...ownedClaudePresets,
+ ];
+diff --git a/src/config/cleanProviderPolicy.ts b/src/config/cleanProviderPolicy.ts
+new file mode 100644
+index 0000000..7644a0e
+--- /dev/null
++++ b/src/config/cleanProviderPolicy.ts
+@@ -0,0 +1,71 @@
++import type { AnyPreset } from "@/components/providers/forms/ProviderPresetSelector";
++
++/**
++ * The clean distribution has no provider directory. These are configuration
++ * modes with dedicated behavior in the upstream forms, not vendor suggestions.
++ * Keep the upstream catalogs intact for model metadata and existing user data.
++ * New vendors are excluded unless they implement an explicitly supported mode.
++ */
++export type ConnectionMode = "account" | "plugin" | "cloud";
++
++const MANAGED_ACCOUNT_TYPES = new Set([
++  "github_copilot",
++  "codex_oauth",
++  "xai_oauth",
++]);
++
++const NATIVE_ACCOUNT_NAMES = new Set([
++  "Claude Official",
++  "Claude Desktop Official",
++  "OpenAI Official",
++  "Google Official",
++  "Grok Official",
++]);
++
++const NATIVE_ACCOUNT_KEYS = new Set([
++  "kimi-official-account",
++  "dsh-official-account",
++  "copilot-official",
++  "workbuddy-official",
++]);
++
++export function connectionModeFor(preset: AnyPreset): ConnectionMode | null {
++  const fields = preset as AnyPreset & {
++    providerType?: string;
++    providerKey?: string;
++    settingsConfig?: {
++      api?: string;
++      npm?: string;
++      env?: Record<string, unknown>;
++    };
++    templateValues?: Record<string, unknown>;
++  };
++
++  if (
++    MANAGED_ACCOUNT_TYPES.has(fields.providerType ?? "") ||
++    (preset.category === "official" &&
++      (NATIVE_ACCOUNT_NAMES.has(preset.name) ||
++        NATIVE_ACCOUNT_KEYS.has(fields.providerKey ?? "")))
++  ) {
++    return "account";
++  }
++
++  if (preset.category === "omo" || preset.category === "omo-slim") {
++    return "plugin";
++  }
++
++  const config = fields.settingsConfig;
++  const template = fields.templateValues;
++  if (
++    config?.env?.CLAUDE_CODE_USE_BEDROCK === "1" ||
++    config?.npm === "@ai-sdk/amazon-bedrock" ||
++    config?.api === "bedrock-converse-stream" ||
++    (preset.category === "cloud_provider" &&
++      (Boolean(template?.AZURE_RESOURCE_NAME) ||
++        (Boolean(template?.ACCOUNT_ID) && Boolean(template?.GATEWAY_ID))))
++  ) {
++    return "cloud";
++  }
++
++  return null;
++}
+diff --git a/src/config/codexProviderPresets.ts b/src/config/codexProviderPresets.ts
+index 8c5c315..6b66f64 100644
+--- a/src/config/codexProviderPresets.ts
++++ b/src/config/codexProviderPresets.ts
+@@ -1,3 +1,4 @@
++import { ownedCodexPresets } from "./ownedProviderPresets";
+ /**
+  * Codex 预设供应商配置模板
+  */
+@@ -5076,4 +5077,5 @@ requires_openai_auth = true`,
+       },
+     ],
+   },
++  ...ownedCodexPresets,
+ ];
+diff --git a/src/config/dshProviderPresets.ts b/src/config/dshProviderPresets.ts
+index ea4860a..4f27246 100644
+--- a/src/config/dshProviderPresets.ts
++++ b/src/config/dshProviderPresets.ts
+@@ -1,3 +1,4 @@
++import { ownedDshPresets } from "./ownedProviderPresets";
+ import { piProviderPresets, type PiPresetModel } from "./piProviderPresets";
+ import type { McodeProviderPreset } from "./mcodeProviderPresets";
+ 
+@@ -72,8 +73,8 @@ function reasoningEfforts(model: PiPresetModel) {
+ }
+ 
+ /** DSH's pi-ai adapter accepts these three wire protocols and native compatibility options. */
+-export const dshProviderPresets: McodeProviderPreset[] =
+-  piProviderPresets.flatMap((preset) => {
++export const dshProviderPresets: McodeProviderPreset[] = piProviderPresets
++  .flatMap<McodeProviderPreset>((preset) => {
+     const config = preset.settingsConfig;
+     if (
+       ![
+@@ -117,7 +118,8 @@ export const dshProviderPresets: McodeProviderPreset[] =
+         },
+       },
+     ];
+-  });
++  })
++  .concat(ownedDshPresets);
+ 
+ export const DSH_ACCOUNT_PRESET_ID = "dsh-official-account";
+ 
+diff --git a/src/config/hermesProviderPresets.ts b/src/config/hermesProviderPresets.ts
+index 21d9821..904827e 100644
+--- a/src/config/hermesProviderPresets.ts
++++ b/src/config/hermesProviderPresets.ts
+@@ -1,3 +1,4 @@
++import { ownedHermesPresets } from "./ownedProviderPresets";
+ /**
+  * Hermes Agent provider presets configuration
+  * Hermes uses custom_providers array in config.yaml
+@@ -3578,4 +3579,5 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
+     },
+     icon: "aicoming",
+   },
++  ...ownedHermesPresets,
+ ];
+diff --git a/src/config/openclawProviderPresets.ts b/src/config/openclawProviderPresets.ts
+index 27c2999..ae28394 100644
+--- a/src/config/openclawProviderPresets.ts
++++ b/src/config/openclawProviderPresets.ts
+@@ -1,3 +1,4 @@
++import { ownedOpenclawPresets } from "./ownedProviderPresets";
+ /**
+  * OpenClaw provider presets configuration
+  * OpenClaw uses models.providers structure with custom provider configs
+@@ -6554,4 +6555,5 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
+     },
+     icon: "aicoming",
+   },
++  ...ownedOpenclawPresets,
+ ];
+diff --git a/src/config/opencodeProviderPresets.ts b/src/config/opencodeProviderPresets.ts
+index d1aa85b..d345781 100644
+--- a/src/config/opencodeProviderPresets.ts
++++ b/src/config/opencodeProviderPresets.ts
+@@ -1,3 +1,4 @@
++import { ownedOpencodePresets } from "./ownedProviderPresets";
+ import type { ProviderCategory, OpenCodeProviderConfig } from "../types";
+ import type { PresetTheme, TemplateValueConfig } from "./claudeProviderPresets";
+ import type { PresetFamilyFields } from "./presetFamilies";
+@@ -4470,4 +4471,5 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
+     },
+     icon: "aicoming",
+   },
++  ...ownedOpencodePresets,
+ ];
+diff --git a/src/config/ownedProviderPresets.ts b/src/config/ownedProviderPresets.ts
+new file mode 100644
+index 0000000..0c7197e
+--- /dev/null
++++ b/src/config/ownedProviderPresets.ts
+@@ -0,0 +1,285 @@
++import type { ProviderPreset } from "./claudeProviderPresets";
++import type { ClaudeDesktopProviderPreset } from "./claudeDesktopProviderPresets";
++import type { CodexProviderPreset } from "./codexProviderPresets";
++import type { OpenCodeProviderPreset } from "./opencodeProviderPresets";
++import type { OpenClawProviderPreset } from "./openclawProviderPresets";
++import type { HermesProviderPreset } from "./hermesProviderPresets";
++import type { McodeProviderPreset } from "./mcodeProviderPresets";
++
++/**
++ * This distribution's two explicitly requested services. These templates only
++ * fill the add-provider form; they never create providers or contain API keys.
++ * Keep the verified protocol/client combinations explicit. In particular,
++ * neither service has a documented native Gemini configuration.
++ *
++ * Sources checked 2026-11-19:
++ * https://codexzh.com/
++ * https://docs.codexzh.com/claude-code/codexzh-models
++ * https://docs.codexzh.com/claude-code/clients
++ * https://docs.codexzh.com/claude-code/cx-codex
++ * https://docs.codexzh.com/claude-code/opencode
++ * https://docs.codexzh.com/claude-code/openclaw
++ * https://docs.codexzh.com/codex/opencode
++ * https://docs.codexzh.com/codex/openclaw
++ * https://docs.codexzh.com/codex/hermes-config
++ * https://docs.codexzh.com/codex/deepseek-harness
++ */
++export interface OwnedProviderDetails {
++  id: "codexzh" | "ccodezh";
++  hintKey: string;
++  providerKey?: string;
++}
++
++const registeredPresets = new WeakMap<object, OwnedProviderDetails>();
++
++function register<T extends object>(
++  preset: T,
++  details: OwnedProviderDetails,
++): T {
++  registeredPresets.set(preset, details);
++  return preset;
++}
++
++// Match exact registered templates, not names or domains which a future
++// upstream preset could reuse. Unknown upstream suppliers remain hidden.
++export function ownedProviderDetails(
++  preset: object,
++): OwnedProviderDetails | undefined {
++  return registeredPresets.get(preset);
++}
++
++const codexzh = {
++  name: "CodexZH",
++  websiteUrl: "https://codexzh.com",
++  category: "third_party" as const,
++};
++
++const ccodezh = {
++  name: "CcodeZH",
++  websiteUrl: "https://ccodezh.com",
++  category: "third_party" as const,
++};
++
++const codexzhResponses = {
++  id: "codexzh" as const,
++  hintKey: "providerPreset.owned.codexzhResponses",
++  providerKey: "codexzh",
++};
++const codexzhClaude = {
++  id: "codexzh" as const,
++  hintKey: "providerPreset.owned.codexzhClaude",
++};
++const ccodezhThirdParty = {
++  id: "ccodezh" as const,
++  hintKey: "providerPreset.owned.ccodezhThirdParty",
++  providerKey: "ccodezh",
++};
++
++export const ownedClaudePresets: ProviderPreset[] = [
++  register<ProviderPreset>(
++    {
++      ...codexzh,
++      apiFormat: "anthropic",
++      apiKeyField: "ANTHROPIC_AUTH_TOKEN",
++      settingsConfig: {
++        env: {
++          ANTHROPIC_BASE_URL: "https://api.codexzh.com",
++          ANTHROPIC_AUTH_TOKEN: "",
++          ANTHROPIC_MODEL: "cc-grok-4.6",
++          ANTHROPIC_DEFAULT_OPUS_MODEL: "cc-grok-4.6",
++          ANTHROPIC_DEFAULT_SONNET_MODEL: "cc-grok-4.6",
++          ANTHROPIC_DEFAULT_HAIKU_MODEL: "cc-grok-4.6",
++        },
++      },
++    },
++    codexzhClaude,
++  ),
++  register<ProviderPreset>(
++    {
++      ...ccodezh,
++      apiFormat: "anthropic",
++      apiKeyField: "ANTHROPIC_AUTH_TOKEN",
++      settingsConfig: {
++        env: {
++          ANTHROPIC_BASE_URL: "https://api.ccodezh.com",
++          ANTHROPIC_AUTH_TOKEN: "",
++        },
++      },
++    },
++    { id: "ccodezh", hintKey: "providerPreset.owned.ccodezhClaude" },
++  ),
++];
++
++export const ownedClaudeDesktopPresets: ClaudeDesktopProviderPreset[] = [
++  register<ClaudeDesktopProviderPreset>(
++    {
++      ...codexzh,
++      baseUrl: "https://api.codexzh.com",
++      apiKeyField: "ANTHROPIC_AUTH_TOKEN",
++      apiFormat: "anthropic",
++      // Desktop validates Claude-shaped route IDs. Keep the upstream mapping
++      // mode and send the documented cc-* model through that existing route.
++      mode: "proxy",
++      modelRoutes: [
++        {
++          routeId: "claude-sonnet-5",
++          upstreamModel: "cc-grok-4.6",
++          labelOverride: "Grok 4.6",
++          supports1m: false,
++        },
++      ],
++    },
++    codexzhClaude,
++  ),
++  register<ClaudeDesktopProviderPreset>(
++    {
++      ...ccodezh,
++      baseUrl: "https://api.ccodezh.com",
++      apiKeyField: "ANTHROPIC_AUTH_TOKEN",
++      apiFormat: "anthropic",
++      mode: "direct",
++    },
++    { id: "ccodezh", hintKey: "providerPreset.owned.ccodezhDesktop" },
++  ),
++];
++
++const responsesConfig = (id: string, name: string, model: string) =>
++  `model_provider = "${id}"
++model = "${model}"
++model_reasoning_effort = "high"
++
++[model_providers.${id}]
++name = "${name}"
++base_url = "https://api.${id}.com/v1"
++wire_api = "responses"
++requires_openai_auth = true`;
++
++export const ownedCodexPresets: CodexProviderPreset[] = [
++  register<CodexProviderPreset>(
++    {
++      ...codexzh,
++      auth: { OPENAI_API_KEY: "" },
++      config: responsesConfig("codexzh", "CodexZH", "gpt-6.1-sol"),
++      apiFormat: "openai_responses",
++    },
++    codexzhResponses,
++  ),
++  register<CodexProviderPreset>(
++    {
++      ...ccodezh,
++      auth: { OPENAI_API_KEY: "" },
++      config: responsesConfig("ccodezh", "CcodeZH", "gpt-5.6-sol"),
++      apiFormat: "openai_responses",
++    },
++    { id: "ccodezh", hintKey: "providerPreset.owned.ccodezhCodex" },
++  ),
++];
++
++export const ownedOpencodePresets: OpenCodeProviderPreset[] = [
++  register<OpenCodeProviderPreset>(
++    {
++      ...codexzh,
++      settingsConfig: {
++        npm: "@ai-sdk/openai",
++        name: "CodexZH",
++        options: {
++          baseURL: "https://api.codexzh.com/v1",
++          apiKey: "",
++          setCacheKey: true,
++        },
++        models: { "gpt-6.1-sol": { name: "GPT-6.1 Sol" } },
++      },
++    },
++    { ...codexzhResponses, providerKey: "openai" },
++  ),
++  register<OpenCodeProviderPreset>(
++    {
++      ...ccodezh,
++      settingsConfig: {
++        npm: "@ai-sdk/anthropic",
++        name: "CcodeZH",
++        options: { baseURL: "https://api.ccodezh.com/v1", apiKey: "" },
++        models: {
++          "claude-sonnet-5-5": { name: "Claude Sonnet 5.5" },
++          "claude-opus-5-5": { name: "Claude Opus 5.5" },
++          "claude-haiku-4-5-20251001": { name: "Claude Haiku 4.5" },
++        },
++      },
++    },
++    ccodezhThirdParty,
++  ),
++];
++
++export const ownedOpenclawPresets: OpenClawProviderPreset[] = [
++  register<OpenClawProviderPreset>(
++    {
++      ...codexzh,
++      settingsConfig: {
++        baseUrl: "https://api.codexzh.com/v1",
++        apiKey: "",
++        api: "openai-responses",
++        models: [{ id: "gpt-6.1-sol", name: "GPT-6.1 Sol" }],
++      },
++      suggestedDefaults: { model: { primary: "codexzh/gpt-6.1-sol" } },
++    },
++    codexzhResponses,
++  ),
++  register<OpenClawProviderPreset>(
++    {
++      ...ccodezh,
++      settingsConfig: {
++        baseUrl: "https://api.ccodezh.com",
++        apiKey: "",
++        api: "anthropic-messages",
++        models: [{ id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" }],
++      },
++      suggestedDefaults: {
++        model: { primary: "ccodezh/claude-sonnet-5-5" },
++      },
++    },
++    ccodezhThirdParty,
++  ),
++];
++
++export const ownedHermesPresets: HermesProviderPreset[] = [
++  register<HermesProviderPreset>(
++    {
++      ...codexzh,
++      providerKey: "codexzh",
++      settingsConfig: {
++        name: "codexzh",
++        base_url: "https://api.codexzh.com/v1",
++        api_key: "",
++        api_mode: "codex_responses",
++        models: [{ id: "gpt-5.6-sol", context_length: 272000 }],
++      },
++      suggestedDefaults: { model: { default: "gpt-5.6-sol" } },
++    },
++    codexzhResponses,
++  ),
++];
++
++export const ownedDshPresets: McodeProviderPreset[] = [
++  register<McodeProviderPreset>(
++    {
++      ...codexzh,
++      providerKey: "codexzh",
++      settingsConfig: {
++        name: "CodexZH",
++        kind: "custom",
++        enabled: true,
++        api: "openai-responses",
++        options: { baseURL: "https://api.codexzh.com/v1", apiKey: "" },
++        models: {
++          "gpt-6.1-sol": {
++            name: "GPT-6.1 Sol",
++            modalities: { input: ["text", "image"], output: ["text"] },
++            reasoning: true,
++            reasoningEfforts: { low: "low", medium: "medium", high: "high" },
++          },
++        },
++      },
++    },
++    codexzhResponses,
++  ),
++];
+diff --git a/src/config/universalProviderPresets.ts b/src/config/universalProviderPresets.ts
+index 0e1315d..970b3c6 100644
+--- a/src/config/universalProviderPresets.ts
++++ b/src/config/universalProviderPresets.ts
+@@ -59,21 +59,6 @@ const NEWAPI_DEFAULT_MODELS: UniversalProviderModels = {
+  * 统一供应商预设列表
+  */
+ export const universalProviderPresets: UniversalProviderPreset[] = [
+-  {
+-    name: "NewAPI",
+-    providerType: "newapi",
+-    defaultApps: {
+-      claude: true,
+-      codex: true,
+-      gemini: true,
+-    },
+-    defaultModels: NEWAPI_DEFAULT_MODELS,
+-    websiteUrl: "https://www.newapi.pro",
+-    icon: "newapi",
+-    iconColor: "#00A67E",
+-    description:
+-      "NewAPI 是一个可自部署的 API 网关，支持 Anthropic、OpenAI、Gemini 等多种协议",
+-  },
+   {
+     name: "自定义网关",
+     providerType: "custom_gateway",
+diff --git a/src/i18n/locales/en.json b/src/i18n/locales/en.json
+index 0b6e8a3..c335e21 100644
+--- a/src/i18n/locales/en.json
++++ b/src/i18n/locales/en.json
+@@ -2306,6 +2306,17 @@
+     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
+   },
+   "providerPreset": {
++    "connectionMethod": "Connection method",
++    "connectionMethodHint": "Choose an account, authentication method or plugin when needed.",
++    "owned": {
++      "title": "Provider templates",
++      "codexzhResponses": "Enter a CodexZH API key. Select models without the cc- prefix; CcodeZH keys are separate.",
++      "codexzhClaude": "Enter a CodexZH API key and use a cc- model. CcodeZH keys and balances are separate.",
++      "ccodezhClaude": "Enter a CcodeZH API key for a Claude group. CodexZH keys cannot be used here.",
++      "ccodezhDesktop": "Enter a CcodeZH API key. The cc group only supports Code mode; cc-n supports other modes.",
++      "ccodezhCodex": "Requires a CcodeZH API key in the cx group. Claude-group keys cannot access Codex.",
++      "ccodezhThirdParty": "Requires a CcodeZH API key in the cc-3 or cc-n group."
++    },
+     "label": "Provider Preset",
+     "custom": "Custom Configuration",
+     "other": "Other",
+diff --git a/src/i18n/locales/ja.json b/src/i18n/locales/ja.json
+index b225edc..c0bdd46 100644
+--- a/src/i18n/locales/ja.json
++++ b/src/i18n/locales/ja.json
+@@ -2306,6 +2306,17 @@
+     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
+   },
+   "providerPreset": {
++    "connectionMethod": "接続方法",
++    "connectionMethodHint": "アカウント、認証方式、プラグインを使う場合はここで選択します。",
++    "owned": {
++      "title": "プロバイダーテンプレート",
++      "codexzhResponses": "CodexZH の API キーを入力し、cc- が付かないモデルを選択します。CcodeZH のキーは使えません。",
++      "codexzhClaude": "CodexZH の API キーと cc- で始まるモデルを使用します。CcodeZH のアカウントや残高とは別です。",
++      "ccodezhClaude": "CcodeZH の Claude グループの API キーを入力します。CodexZH のキーは使えません。",
++      "ccodezhDesktop": "CcodeZH の API キーを入力します。cc グループは Code モード専用で、cc-n は他のモードにも対応します。",
++      "ccodezhCodex": "CcodeZH の cx グループの API キーが必要です。Claude グループのキーは Codex には使えません。",
++      "ccodezhThirdParty": "CcodeZH の cc-3 または cc-n グループの API キーが必要です。"
++    },
+     "label": "プロバイダータイプ",
+     "custom": "カスタム設定",
+     "other": "その他",
+diff --git a/src/i18n/locales/tr.json b/src/i18n/locales/tr.json
+index 8e41841..d5dba9e 100644
+--- a/src/i18n/locales/tr.json
++++ b/src/i18n/locales/tr.json
+@@ -2237,6 +2237,17 @@
+     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
+   },
+   "providerPreset": {
++    "connectionMethod": "Bağlantı yöntemi",
++    "connectionMethodHint": "Gerektiğinde bir hesap, kimlik doğrulama yöntemi veya eklenti seçin.",
++    "owned": {
++      "title": "Sağlayıcı şablonları",
++      "codexzhResponses": "CodexZH API anahtarınızı girin ve cc- öneki olmayan modelleri seçin. CcodeZH anahtarları ayrıdır.",
++      "codexzhClaude": "CodexZH API anahtarı ve cc- önekli bir model kullanın. CcodeZH hesabı ve bakiyesi ayrıdır.",
++      "ccodezhClaude": "Claude grubuna ait bir CcodeZH API anahtarı girin. CodexZH anahtarı burada kullanılamaz.",
++      "ccodezhDesktop": "CcodeZH API anahtarınızı girin. cc grubu yalnızca Code modunu, cc-n diğer modları da destekler.",
++      "ccodezhCodex": "cx grubuna ait bir CcodeZH API anahtarı gerekir. Claude grubu anahtarları Codex için kullanılamaz.",
++      "ccodezhThirdParty": "cc-3 veya cc-n grubuna ait bir CcodeZH API anahtarı gerekir."
++    },
+     "label": "Sağlayıcı Ön Ayarı",
+     "custom": "Özel Yapılandırma",
+     "other": "Diğer",
+diff --git a/src/i18n/locales/zh-TW.json b/src/i18n/locales/zh-TW.json
+index 87a0321..64e849d 100644
+--- a/src/i18n/locales/zh-TW.json
++++ b/src/i18n/locales/zh-TW.json
+@@ -2306,6 +2306,17 @@
+     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
+   },
+   "providerPreset": {
++    "connectionMethod": "連線方式",
++    "connectionMethodHint": "需要帳號登入、特殊驗證或外掛設定時，在這裡選擇。",
++    "owned": {
++      "title": "供應商範本",
++      "codexzhResponses": "填入 CodexZH 的 API Key，選擇不帶 cc- 前綴的模型；不能使用 CcodeZH 的 Key。",
++      "codexzhClaude": "填入 CodexZH 的 API Key，使用 cc- 前綴的模型；與 CcodeZH 的帳號、額度不互通。",
++      "ccodezhClaude": "填入 CcodeZH 的 Claude 分組 API Key；不能使用 CodexZH 的 Key。",
++      "ccodezhDesktop": "填入 CcodeZH 的 API Key；cc 分組僅支援 Code 模式，cc-n 分組可用於其他模式。",
++      "ccodezhCodex": "僅支援 CcodeZH 的 cx 分組 API Key；Claude 分組的 Key 不能用於 Codex。",
++      "ccodezhThirdParty": "填入 CcodeZH 的 cc-3 或 cc-n 分組 API Key。"
++    },
+     "label": "預設供應商",
+     "custom": "自訂設定",
+     "other": "其他",
+diff --git a/src/i18n/locales/zh.json b/src/i18n/locales/zh.json
+index b11b3a0..a20d3ed 100644
+--- a/src/i18n/locales/zh.json
++++ b/src/i18n/locales/zh.json
+@@ -2306,6 +2306,17 @@
+     "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
+   },
+   "providerPreset": {
++    "connectionMethod": "连接方式",
++    "connectionMethodHint": "需要账号登录、特殊认证或插件配置时，在这里选择。",
++    "owned": {
++      "title": "供应商模板",
++      "codexzhResponses": "填写 CodexZH 的 API Key，选择不带 cc- 前缀的模型；不能使用 CcodeZH 的 Key。",
++      "codexzhClaude": "填写 CodexZH 的 API Key，使用 cc- 前缀的模型；与 CcodeZH 的账号、额度不互通。",
++      "ccodezhClaude": "填写 CcodeZH 的 Claude 分组 API Key；不能使用 CodexZH 的 Key。",
++      "ccodezhDesktop": "填写 CcodeZH 的 API Key；cc 分组仅支持 Code 模式，cc-n 分组可用于其他模式。",
++      "ccodezhCodex": "仅支持 CcodeZH 的 cx 分组 API Key；Claude 分组的 Key 不能用于 Codex。",
++      "ccodezhThirdParty": "填写 CcodeZH 的 cc-3 或 cc-n 分组 API Key。"
++    },
+     "label": "预设供应商",
+     "custom": "自定义配置",
+     "other": "其他",
+diff --git a/tests/components/CleanProviders.test.tsx b/tests/components/CleanProviders.test.tsx
+new file mode 100644
+index 0000000..eb890dc
+--- /dev/null
++++ b/tests/components/CleanProviders.test.tsx
+@@ -0,0 +1,251 @@
++import { render, renderHook, screen } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { describe, expect, it, vi } from "vitest";
++import i18n from "i18next";
++import { providerPresets } from "@/config/claudeProviderPresets";
++import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPresets";
++import { codexProviderPresets } from "@/config/codexProviderPresets";
++import { geminiProviderPresets } from "@/config/geminiProviderPresets";
++import { grokBuildProviderPresets } from "@/config/grokBuildProviderPresets";
++import { opencodeProviderPresets } from "@/config/opencodeProviderPresets";
++import { openclawProviderPresets } from "@/config/openclawProviderPresets";
++import { hermesProviderPresets } from "@/config/hermesProviderPresets";
++import { piProviderPresets } from "@/config/piProviderPresets";
++import { ompProviderPresets } from "@/config/ompProviderPresets";
++import { mcodeProviderPresets } from "@/config/mcodeProviderPresets";
++import { dshProviderPresets } from "@/config/dshProviderPresets";
++import { kimiProviderPresets } from "@/config/kimiProviderPresets";
++import { copilotProviderPresets } from "@/config/copilotProviderPresets";
++import { workbuddyProviderPresets } from "@/config/workbuddyProviderPresets";
++import { universalProviderPresets } from "@/config/universalProviderPresets";
++import {
++  ProviderPresetSelector,
++  type AnyPreset,
++} from "@/components/providers/forms/ProviderPresetSelector";
++import { ApiKeySection } from "@/components/providers/forms/shared/ApiKeySection";
++import { useApiKeyLink } from "@/components/providers/forms/hooks/useApiKeyLink";
++
++const catalogs: Array<[string, AnyPreset[]]> = [
++  ["claude", providerPresets],
++  ["claude-desktop", claudeDesktopProviderPresets],
++  ["codex", codexProviderPresets],
++  ["gemini", geminiProviderPresets],
++  ["agy", geminiProviderPresets],
++  ["grokbuild", grokBuildProviderPresets],
++  ["opencode", opencodeProviderPresets],
++  ["openclaw", openclawProviderPresets],
++  ["hermes", hermesProviderPresets],
++  ["pi", piProviderPresets],
++  ["omp", ompProviderPresets],
++  ["mcode", mcodeProviderPresets],
++  ["dsh", dshProviderPresets],
++  ["kimi", kimiProviderPresets],
++  ["copilot", copilotProviderPresets],
++  ["workbuddy", workbuddyProviderPresets],
++];
++
++const expectedServices: Record<string, string[]> = {
++  claude: ["CodexZH", "CcodeZH"],
++  "claude-desktop": ["CodexZH", "CcodeZH"],
++  codex: ["CodexZH", "CcodeZH"],
++  opencode: ["CodexZH", "CcodeZH"],
++  openclaw: ["CodexZH", "CcodeZH"],
++  hermes: ["CodexZH"],
++  dsh: ["CodexZH"],
++};
++
++describe("clean provider picker", () => {
++  it.each(catalogs)(
++    "%s offers custom configuration and only its verified owned services",
++    async (app, presets) => {
++      const choose = vi.fn();
++      const user = userEvent.setup();
++      render(
++        <ProviderPresetSelector
++          selectedPresetId="custom"
++          presetEntries={presets.map((preset, index) => ({
++            id: String(index),
++            preset,
++          }))}
++          onPresetChange={choose}
++        />,
++      );
++
++      // The exact allowlist also rejects accidental propagation into clients
++      // without a documented protocol, and newly added upstream suppliers.
++      const expected = [
++        "providerPreset.custom",
++        ...(expectedServices[app] ?? []),
++      ];
++      expect(
++        screen
++          .getAllByRole("button")
++          .map((button) => button.getAttribute("aria-label")),
++      ).toEqual(expected);
++      expect(screen.queryByRole("link")).not.toBeInTheDocument();
++      for (const service of expectedServices[app] ?? []) {
++        await user.click(screen.getByRole("button", { name: service }));
++        expect(choose).toHaveBeenLastCalledWith(
++          String(presets.findIndex((preset) => preset.name === service)),
++        );
++      }
++      await user.click(
++        screen.getByRole("button", { name: "providerPreset.custom" }),
++      );
++      expect(choose).toHaveBeenCalledWith("custom");
++    },
++  );
++
++  it("keeps cross-client OAuth choices wired to their original IDs", async () => {
++    const choose = vi.fn();
++    const user = userEvent.setup();
++    const index = providerPresets.findIndex(
++      (preset) => preset.providerType === "codex_oauth",
++    );
++    expect(index).toBeGreaterThanOrEqual(0);
++    render(
++      <ProviderPresetSelector
++        selectedPresetId="custom"
++        presetEntries={providerPresets.map((preset, i) => ({
++          id: `claude-${i}`,
++          preset,
++        }))}
++        onPresetChange={choose}
++      />,
++    );
++    await user.selectOptions(screen.getByRole("combobox"), `claude-${index}`);
++    expect(choose).toHaveBeenCalledWith(`claude-${index}`);
++  });
++
++  it("does not admit newly added ordinary vendors into connection choices", () => {
++    render(
++      <ProviderPresetSelector
++        selectedPresetId="custom"
++        presetEntries={[
++          {
++            id: "new-vendor",
++            preset: {
++              name: "New Official Vendor",
++              category: "official",
++              websiteUrl: "https://vendor.example",
++              settingsConfig: {},
++            },
++          },
++          {
++            id: "new-cloud",
++            preset: {
++              name: "New Cloud Vendor",
++              category: "cloud_provider",
++              websiteUrl: "https://cloud.example",
++              settingsConfig: {},
++            },
++          },
++          {
++            id: "copied-service-name",
++            preset: {
++              name: "CodexZH",
++              category: "third_party",
++              websiteUrl: "https://codexzh.com",
++              settingsConfig: {},
++            },
++          },
++        ]}
++        onPresetChange={vi.fn()}
++      />,
++    );
++    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
++    expect(screen.queryByText(/New .* Vendor/)).not.toBeInTheDocument();
++    expect(screen.queryByText("CodexZH")).not.toBeInTheDocument();
++  });
++
++  it("keeps the custom universal gateway without a named vendor template", async () => {
++    const openUniversal = vi.fn();
++    const user = userEvent.setup();
++    render(
++      <ProviderPresetSelector
++        selectedPresetId="custom"
++        presetEntries={[]}
++        onPresetChange={vi.fn()}
++        onUniversalPresetSelect={openUniversal}
++      />,
++    );
++    expect(screen.queryByText("NewAPI")).not.toBeInTheDocument();
++    await user.click(screen.getByRole("button", { name: "自定义网关" }));
++    expect(openUniversal).toHaveBeenCalledWith(
++      expect.objectContaining({ isCustomTemplate: true }),
++    );
++    expect(universalProviderPresets).toHaveLength(1);
++  });
++});
++
++describe("clean provider links and help", () => {
++  it("does not inject an affiliate URL for an imported endpoint", () => {
++    const { result } = renderHook(() =>
++      useApiKeyLink({
++        appId: "claude",
++        category: "third_party",
++        selectedPresetId: "custom",
++        formBaseUrl: "https://vendor.example/v1",
++        formWebsiteUrl: "https://my-saved-url.example",
++        presetEntries: [
++          {
++            id: "vendor",
++            preset: {
++              name: "Advertised vendor",
++              category: "third_party",
++              websiteUrl: "https://vendor.example",
++              apiKeyUrl: "https://vendor.example/register?ref=advertiser",
++              partnerPromotionKey: "advertiser",
++              settingsConfig: {
++                env: { ANTHROPIC_BASE_URL: "https://vendor.example/v1" },
++              },
++            },
++          },
++        ],
++      }),
++    );
++    expect(result.current.websiteUrl).toBe("https://my-saved-url.example");
++  });
++
++  it("retains the Google OAuth marker needed by the official authentication form", () => {
++    const { result } = renderHook(() =>
++      useApiKeyLink({
++        appId: "gemini",
++        category: "official",
++        selectedPresetId: "google-account",
++        formWebsiteUrl: "",
++        presetEntries: [
++          { id: "google-account", preset: geminiProviderPresets[0] },
++        ],
++      }),
++    );
++    expect(result.current.partnerPromotionKey).toBe("google-official");
++  });
++
++  it("shows functional API-key help without promotion copy", () => {
++    i18n.addResource(
++      "zh",
++      "translation",
++      "providerForm.partnerPromotion.kimi",
++      "This is sponsor text",
++    );
++    render(
++      <ApiKeySection
++        value=""
++        onChange={vi.fn()}
++        shouldShowLink={true}
++        websiteUrl="https://user-entered.example/keys"
++        partnerPromotionKey="kimi"
++        hint="Keep this functional input hint"
++      />,
++    );
++    expect(
++      screen.getByText("Keep this functional input hint"),
++    ).toBeInTheDocument();
++    expect(screen.queryByText("This is sponsor text")).not.toBeInTheDocument();
++    expect(screen.getByRole("link")).toHaveAttribute(
++      "href",
++      "https://user-entered.example/keys",
++    );
++  });
++});
+diff --git a/tests/components/OwnedProviderForms.test.tsx b/tests/components/OwnedProviderForms.test.tsx
+new file mode 100644
+index 0000000..38dc01b
+--- /dev/null
++++ b/tests/components/OwnedProviderForms.test.tsx
+@@ -0,0 +1,257 @@
++import { fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { QueryClientProvider } from "@tanstack/react-query";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { http, HttpResponse } from "msw";
++import { ProviderForm } from "@/components/providers/forms/ProviderForm";
++import { ClaudeDesktopProviderForm } from "@/components/providers/forms/ClaudeDesktopProviderForm";
++import { McodeProviderForm } from "@/components/providers/forms/McodeProviderForm";
++import type { AppId } from "@/lib/api";
++import { createTestQueryClient } from "../utils/testQueryClient";
++import { server } from "../msw/server";
++
++vi.mock("@/components/JsonEditor", () => ({
++  default: ({ value }: { value: string }) => (
++    <textarea readOnly value={value} />
++  ),
++}));
++
++vi.mock("@/components/providers/forms/hooks", async (importOriginal) => {
++  const actual =
++    await importOriginal<typeof import("@/components/providers/forms/hooks")>();
++  const signedOut = () => ({
++    isAuthenticated: false,
++    isStatusSuccess: true,
++    isStatusError: false,
++    defaultAccountId: null,
++    accounts: [],
++  });
++  return {
++    ...actual,
++    useCopilotAuth: signedOut,
++    useCodexOauth: signedOut,
++    useXaiOauth: signedOut,
++  };
++});
++
++const cases: Array<{
++  app: AppId;
++  service: string;
++  baseUrl: string;
++  protocol: string;
++  hint: string;
++  providerKey?: string;
++}> = [
++  {
++    app: "claude",
++    service: "CodexZH",
++    baseUrl: "https://api.codexzh.com",
++    protocol: "anthropic",
++    hint: "codexzhClaude",
++  },
++  {
++    app: "claude",
++    service: "CcodeZH",
++    baseUrl: "https://api.ccodezh.com",
++    protocol: "anthropic",
++    hint: "ccodezhClaude",
++  },
++  {
++    app: "codex",
++    service: "CodexZH",
++    baseUrl: "https://api.codexzh.com/v1",
++    protocol: "responses",
++    hint: "codexzhResponses",
++  },
++  {
++    app: "codex",
++    service: "CcodeZH",
++    baseUrl: "https://api.ccodezh.com/v1",
++    protocol: "responses",
++    hint: "ccodezhCodex",
++  },
++  {
++    app: "opencode",
++    service: "CodexZH",
++    baseUrl: "https://api.codexzh.com/v1",
++    protocol: "@ai-sdk/openai",
++    hint: "codexzhResponses",
++    providerKey: "openai",
++  },
++  {
++    app: "opencode",
++    service: "CcodeZH",
++    baseUrl: "https://api.ccodezh.com/v1",
++    protocol: "@ai-sdk/anthropic",
++    hint: "ccodezhThirdParty",
++    providerKey: "ccodezh",
++  },
++  {
++    app: "openclaw",
++    service: "CodexZH",
++    baseUrl: "https://api.codexzh.com/v1",
++    protocol: "openai-responses",
++    hint: "codexzhResponses",
++    providerKey: "codexzh",
++  },
++  {
++    app: "openclaw",
++    service: "CcodeZH",
++    baseUrl: "https://api.ccodezh.com",
++    protocol: "anthropic-messages",
++    hint: "ccodezhThirdParty",
++    providerKey: "ccodezh",
++  },
++  {
++    app: "hermes",
++    service: "CodexZH",
++    baseUrl: "https://api.codexzh.com/v1",
++    protocol: "codex_responses",
++    hint: "codexzhResponses",
++    providerKey: "codexzh",
++  },
++];
++
++describe("owned provider templates use the existing forms", () => {
++  beforeEach(() => {
++    server.use(
++      http.post("http://tauri.local/get_hermes_live_provider_ids", () =>
++        HttpResponse.json([]),
++      ),
++      http.post("http://tauri.local/get_claude_desktop_default_routes", () =>
++        HttpResponse.json([]),
++      ),
++    );
++  });
++  it.each(cases)(
++    "$app / $service waits for the user's key and saves the documented protocol",
++    async ({ app, service, baseUrl, protocol, hint, providerKey }) => {
++      const submit = vi.fn();
++      const { container } = render(
++        <QueryClientProvider client={createTestQueryClient()}>
++          <ProviderForm
++            appId={app}
++            submitLabel="save-owned"
++            onSubmit={submit}
++            onCancel={vi.fn()}
++          />
++        </QueryClientProvider>,
++      );
++      fireEvent.click(screen.getByRole("button", { name: service }));
++      await waitFor(() =>
++        expect(screen.getByLabelText("API Key")).toHaveValue(""),
++      );
++      expect(screen.getByDisplayValue(baseUrl)).toBeInTheDocument();
++      expect(
++        container.querySelector("[data-owned-provider-hint]"),
++      ).toHaveTextContent(`providerPreset.owned.${hint}`);
++      expect(submit).not.toHaveBeenCalled();
++
++      fireEvent.change(screen.getByLabelText("API Key"), {
++        target: { value: "sk-user-supplied-test-key" },
++      });
++      fireEvent.click(screen.getByRole("button", { name: "save-owned" }));
++      await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
++      const saved = submit.mock.calls[0][0];
++      const config = JSON.parse(saved.settingsConfig);
++      expect(saved.name).toBe(service);
++      expect(saved.websiteUrl).toBe(
++        service === "CodexZH" ? "https://codexzh.com" : "https://ccodezh.com",
++      );
++      if (providerKey) expect(saved.providerKey).toBe(providerKey);
++      if (app === "claude") {
++        expect(config.env.ANTHROPIC_BASE_URL).toBe(baseUrl);
++        expect(config.env.ANTHROPIC_AUTH_TOKEN).toBe(
++          "sk-user-supplied-test-key",
++        );
++        expect(saved.meta.apiFormat).toBe(protocol);
++        if (service === "CodexZH") {
++          expect(config.env.ANTHROPIC_MODEL).toBe("cc-grok-4.6");
++          expect(config.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("cc-grok-4.6");
++        }
++      } else if (app === "codex") {
++        expect(config.config).toContain(`base_url = "${baseUrl}"`);
++        expect(config.config).toContain(`wire_api = "${protocol}"`);
++        expect(config.auth.OPENAI_API_KEY).toBe("sk-user-supplied-test-key");
++      } else if (app === "opencode") {
++        expect(config.npm).toBe(protocol);
++        expect(config.options.baseURL).toBe(baseUrl);
++        expect(config.options.apiKey).toBe("sk-user-supplied-test-key");
++        if (service === "CodexZH")
++          expect(config.options.setCacheKey).toBe(true);
++      } else if (app === "openclaw") {
++        expect(config.api).toBe(protocol);
++        expect(config.baseUrl).toBe(baseUrl);
++        expect(config.apiKey).toBe("sk-user-supplied-test-key");
++      } else {
++        expect(config.api_mode).toBe(protocol);
++        expect(config.base_url).toBe(baseUrl);
++        expect(config.api_key).toBe("sk-user-supplied-test-key");
++      }
++    },
++  );
++
++  it.each(["CodexZH", "CcodeZH"])(
++    "Claude Desktop / %s remains a manual save with a blank key",
++    async (service) => {
++      const submit = vi.fn();
++      render(
++        <QueryClientProvider client={createTestQueryClient()}>
++          <ClaudeDesktopProviderForm
++            submitLabel="save-owned"
++            onSubmit={submit}
++            onCancel={vi.fn()}
++          />
++        </QueryClientProvider>,
++      );
++      fireEvent.click(screen.getByRole("button", { name: service }));
++      expect(screen.getByLabelText("API Key")).toHaveValue("");
++      const baseUrl =
++        service === "CodexZH"
++          ? "https://api.codexzh.com"
++          : "https://api.ccodezh.com";
++      expect(screen.getByDisplayValue(baseUrl)).toBeInTheDocument();
++      expect(submit).not.toHaveBeenCalled();
++      fireEvent.change(screen.getByLabelText("API Key"), {
++        target: { value: "sk-user-supplied-test-key" },
++      });
++      fireEvent.click(screen.getByRole("button", { name: "save-owned" }));
++      await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
++      const saved = submit.mock.calls[0][0];
++      expect(JSON.stringify(saved)).toContain(baseUrl);
++      expect(JSON.stringify(saved)).toContain("sk-user-supplied-test-key");
++      if (service === "CodexZH")
++        expect(JSON.stringify(saved)).toContain("cc-grok-4.6");
++    },
++  );
++
++  it("DSH / CodexZH retains Responses and does not add a card before save", async () => {
++    const submit = vi.fn();
++    render(
++      <QueryClientProvider client={createTestQueryClient()}>
++        <McodeProviderForm
++          appId="dsh"
++          submitLabel="save-owned"
++          onSubmit={submit}
++          onCancel={vi.fn()}
++        />
++      </QueryClientProvider>,
++    );
++    fireEvent.click(screen.getByRole("button", { name: "CodexZH" }));
++    expect(screen.getByLabelText("API Key")).toHaveValue("");
++    expect(submit).not.toHaveBeenCalled();
++    fireEvent.change(screen.getByLabelText("API Key"), {
++      target: { value: "sk-user-supplied-test-key" },
++    });
++    fireEvent.click(screen.getByRole("button", { name: "save-owned" }));
++    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
++    const saved = submit.mock.calls[0][0];
++    expect(saved.providerKey).toBe("codexzh");
++    expect(JSON.parse(saved.settingsConfig)).toMatchObject({
++      api: "openai-responses",
++      options: {
++        baseURL: "https://api.codexzh.com/v1",
++        apiKey: "sk-user-supplied-test-key",
++      },
++    });
++  });
++});
 diff --git a/vitest.config.ts b/vitest.config.ts
 index e226110..8cd6f23 100644
 --- a/vitest.config.ts

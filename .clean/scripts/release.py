@@ -18,7 +18,9 @@ import re
 import shutil
 import subprocess
 import tarfile
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -26,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE = Path(".clean-state")
 API = "https://api.github.com"
 PLATFORMS = ("macos", "windows-x64", "windows-arm64", "linux-x64", "linux-arm64")
+PUBLIC_CHECK_DELAYS = (0, 3, 8, 15, 30, 45)
 
 
 def fail(message: str) -> None:
@@ -132,6 +135,66 @@ def normalize_public_key(value: str) -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
+def public_key_material(value: str) -> bytes:
+    encoded = normalize_public_key(value)
+    lines = base64.b64decode(encoded).decode("utf-8").strip().splitlines()
+    return base64.b64decode(lines[1], validate=True)
+
+
+def stable_version(value: str) -> tuple[int, int, int]:
+    if not isinstance(value, str) or not re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", value):
+        fail(f"Expected a stable application version, received {value!r}")
+    return tuple(int(part) for part in value.split("."))
+
+
+def public_json(url: str) -> object:
+    if not url.startswith("https://"):
+        raise RuntimeError("Public update resources must use HTTPS")
+    request = urllib.request.Request(url, headers={"User-Agent": "cc-switch-clean-release", "Cache-Control": "no-cache"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        if not response.geturl().startswith("https://"):
+            raise RuntimeError("Public resource redirected to non-HTTPS transport")
+        raw = response.read(4 * 1024 * 1024 + 1)
+        if len(raw) > 4 * 1024 * 1024:
+            raise RuntimeError("Public update JSON exceeded the expected size limit")
+        return json.loads(raw)
+
+
+def public_asset_size(url: str) -> int | None:
+    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "cc-switch-clean-release"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        if response.status != 200 or not response.geturl().startswith("https://"):
+            raise RuntimeError("Anonymous update asset request failed")
+        size = response.headers.get("Content-Length")
+        return int(size) if size is not None else None
+
+
+def check_release_continuity(data: dict) -> None:
+    """Keep installed clients on a monotonic version stream and the same key."""
+    previous = api(f"/repos/{data['repository']}/releases/latest", allow_404=True)
+    if not previous or not previous["tag_name"].startswith("clean-"):
+        return
+    names = [asset for asset in previous["assets"] if asset["name"] == "clean-build-provenance.json"]
+    if len(names) != 1:
+        fail("Previous clean release lacks unambiguous provenance; review before publishing")
+    expected = f"https://github.com/{data['repository']}/releases/download/{previous['tag_name']}/clean-build-provenance.json"
+    if names[0]["browser_download_url"] != expected:
+        fail("Previous provenance URL is outside this repository release")
+    provenance = public_json(expected)
+    if provenance.get("repository") != data["repository"] or provenance.get("release_tag") != previous["tag_name"]:
+        fail("Previous release provenance does not match the destination repository/tag")
+    old_version, new_version = stable_version(provenance["version"]), stable_version(data["version"])
+    if old_version > new_version:
+        fail("Refusing to move the update feed to an older application version")
+    if old_version == new_version and provenance["revision"] > data["revision"]:
+        fail("Refusing to replace a newer clean revision with an older revision")
+    if provenance.get("signed_updates"):
+        if not data["signed_updates"]:
+            fail("Refusing to replace a signed update feed with an unsigned release")
+        if public_key_material(provenance["updater_public_key"]) != public_key_material(data["updater_public_key"]):
+            fail("Updater public key differs from the previous signed release; existing clients cannot trust it. Keep the original signing key.")
+
+
 def resolve_commit(repository: str, tag: str) -> str:
     data = api(f"/repos/{repository}/git/ref/tags/{tag}")
     obj = data["object"]
@@ -163,15 +226,12 @@ def detect() -> None:
         fail("Only an official stable vMAJOR.MINOR.PATCH release may be built")
     clean_tag = f"clean-{tag}-r{revision}"
     existing = find_release(repository, clean_tag)
-    if existing and not existing["draft"]:
-        print(f"Already published: {clean_tag}; increment release_revision for a new clean-only build.")
-        output("build", "false")
-        return
-
     public_key = os.environ.get("TAURI_PUBLIC_KEY", "").strip()
     endpoint = os.environ.get("CLEAN_UPDATE_ENDPOINT", "").strip()
     has_key = os.environ.get("HAS_SIGNING_KEY", "false").lower() == "true"
     signed = bool(public_key or endpoint or has_key)
+    if cfg.get("require_signed_updates", False) and not (public_key and has_key):
+        fail("This distribution requires signed automatic updates. Complete .clean/scripts/setup-updates.mjs once on the owner's authenticated computer to configure TAURI_PUBLIC_KEY and TAURI_SIGNING_PRIVATE_KEY; unsigned fallback is forbidden.")
     if signed and not (public_key and has_key):
         fail("Partial updater configuration: set TAURI_PUBLIC_KEY variable and TAURI_SIGNING_PRIVATE_KEY secret together")
     expected_endpoint = f"https://github.com/{repository}/releases/latest/download/latest.json"
@@ -182,19 +242,17 @@ def detect() -> None:
             fail("This workflow publishes to its own GitHub releases; an external feed requires a separately configured publisher")
         public_repo = api(f"/repos/{repository}", anonymous=True, allow_404=True)
         if not public_repo or public_repo.get("private", True):
-            fail("Signed native updates require publicly readable release assets. This private repository can publish manual downloads; no visibility is changed automatically.")
+            fail("Signed native updates require publicly readable release assets. Complete the authorized one-time setup before building; this release will not fall back to manual-only or official updates.")
         print("Signed updater mode: own public GitHub release feed and own signing key")
     else:
         endpoint = ""
         print("::warning::Manual-download mode: no updater signing key/feed configured; native updater has no endpoints and cannot install the official build.")
 
-    commit = resolve_commit(upstream, tag)
     data = {
         "schema": 1,
         "repository": repository,
         "upstream_repository": upstream,
         "upstream_tag": tag,
-        "upstream_sha": commit,
         "upstream_release_url": release["html_url"],
         "version": tag[1:],
         "release_tag": clean_tag,
@@ -204,6 +262,16 @@ def detect() -> None:
         "updater_endpoint": endpoint,
         "updater_public_key": public_key,
     }
+    if signed:
+        check_release_continuity(data)
+    if existing and not existing["draft"]:
+        if signed:
+            verify_public_release(data)
+        print(f"Already published: {clean_tag}; update feed checked. Increment release_revision for a new clean-only build.")
+        output("build", "false")
+        return
+    commit = resolve_commit(upstream, tag)
+    data["upstream_sha"] = commit
     write_json(STATE / "release.json", data)
     output("build", "true")
     output("upstream_sha", commit)
@@ -346,9 +414,8 @@ def collect(source: Path, platform: str, destination: Path) -> None:
     })
 
 
-def make_manifest(data: dict, directory: Path) -> dict:
-    tag, version = data["release_tag"], data["upstream_tag"]
-    url = f"https://github.com/{data['repository']}/releases/download/{tag}"
+def updater_files(data: dict) -> dict[str, str]:
+    version = data["upstream_tag"]
     files = {
         "darwin-aarch64": f"CC-Switch-{version}-macOS.tar.gz",
         "darwin-x86_64": f"CC-Switch-{version}-macOS.tar.gz",
@@ -358,8 +425,13 @@ def make_manifest(data: dict, directory: Path) -> dict:
     for arch, filename_arch in (("x86_64", "x86_64"), ("aarch64", "arm64")):
         for extension, suffix in (("AppImage", ""), ("deb", "-deb"), ("rpm", "-rpm")):
             files[f"linux-{arch}{suffix}"] = f"CC-Switch-{version}-Linux-{filename_arch}.{extension}"
+    return files
+
+
+def make_manifest(data: dict, directory: Path) -> dict:
+    url = f"https://github.com/{data['repository']}/releases/download/{data['release_tag']}"
     platforms = {}
-    for platform, name in files.items():
+    for platform, name in updater_files(data).items():
         if not (directory / name).is_file():
             fail(f"Missing updater artifact for {platform}")
         signature = (directory / (name + ".sig")).read_text(encoding="utf-8").strip()
@@ -372,6 +444,51 @@ def make_manifest(data: dict, directory: Path) -> dict:
         "pub_date": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
         "platforms": platforms,
     }
+
+
+def verify_public_release(data: dict, directory: Path | None = None) -> None:
+    """Check the actual anonymous client feed and its assets after CDN propagation.
+
+    A post-publication failure is explicit, but does not delete or rewrite a
+    published release. Later scheduled checks retry this health check without
+    compiling or publishing the same version again.
+    """
+    if not data["signed_updates"]:
+        return
+    base = f"https://github.com/{data['repository']}/releases/download/{data['release_tag']}"
+    endpoint = f"https://github.com/{data['repository']}/releases/latest/download/latest.json"
+    if data["updater_endpoint"] != endpoint:
+        fail("Updater endpoint must remain this repository's public release feed")
+    expected_files = updater_files(data)
+    local = json.loads((directory / "latest.json").read_text(encoding="utf-8")) if directory else None
+    last_error = "not checked"
+    for attempt, delay in enumerate(PUBLIC_CHECK_DELAYS, 1):
+        if delay:
+            time.sleep(delay)
+        try:
+            fixed = public_json(base + "/latest.json")
+            latest = public_json(endpoint)
+            if fixed != latest or (local is not None and fixed != local):
+                raise RuntimeError("GitHub latest feed has not propagated to the published manifest")
+            if fixed.get("version") != data["version"] or set(fixed.get("platforms", {})) != set(expected_files):
+                raise RuntimeError("Public updater manifest has an unexpected version or platform set")
+            visited = set()
+            for platform, name in expected_files.items():
+                entry = fixed["platforms"][platform]
+                url = f"{base}/{name}"
+                if entry.get("url") != url or not entry.get("signature"):
+                    raise RuntimeError(f"Public updater entry is invalid or points outside this release: {platform}")
+                if url not in visited:
+                    size = public_asset_size(url)
+                    if directory and size is not None and size != (directory / name).stat().st_size:
+                        raise RuntimeError(f"Anonymous download size does not match the built artifact: {name}")
+                    visited.add(url)
+            print(f"Verified anonymous update feed and {len(visited)} signed artifact downloads: {endpoint}")
+            return
+        except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError, KeyError, TypeError) as error:
+            last_error = str(error)
+            print(f"::warning::Public update health check {attempt}/{len(PUBLIC_CHECK_DELAYS)}: {last_error}")
+    fail(f"Release {data['release_tag']} is published, but its anonymous update feed could not be verified after bounded retries: {last_error}. The release was preserved; the next scheduled/manual check will retry without rebuilding.")
 
 
 def verify_signatures(data: dict, directory: Path, names: set[str]) -> None:
@@ -394,6 +511,8 @@ def verify_signatures(data: dict, directory: Path, names: set[str]) -> None:
 
 def publish(directory: Path) -> None:
     data = read_state()
+    if config().get("require_signed_updates", False) and not data["signed_updates"]:
+        fail("This distribution requires signed updater artifacts; refusing an unsigned publication")
     all_assets: set[str] = set()
     notarized = False
     for platform in PLATFORMS:
@@ -418,6 +537,7 @@ def publish(directory: Path) -> None:
         if not api(f"/repos/{data['repository']}", anonymous=True, allow_404=True):
             fail("Release repository is no longer publicly readable")
         verify_signatures(data, directory, all_assets)
+        check_release_continuity(data)
         write_json(directory / "latest.json", make_manifest(data, directory))
         all_assets.add("latest.json")
     checksums = {name: sha256(directory / name) for name in sorted(all_assets)}
@@ -430,9 +550,9 @@ def publish(directory: Path) -> None:
 
     updater_note = "独立签名自动更新已配置；更新仅来自本仓库。" if data["signed_updates"] else "当前为手动下载安装模式：未配置独立更新签名和公开更新源，应用内自动更新暂不可用，也不会退回官方广告版。"
     mac_note = "macOS 已使用自己的 Developer ID 签名并公证。" if notarized else "macOS 使用 ad-hoc 签名，未经过 Apple 公证；首次启动可能需要在系统隐私与安全设置中允许。"
-    body = f"""## CC Switch {data['upstream_tag']} · 无内置供应商版 r{data['revision']}
+    body = f"""## CC Switch {data['upstream_tag']} · 自有供应商版 r{data['revision']}
 
-基于 [官方 {data['upstream_tag']}]({data['upstream_release_url']})，移除内置供应商推荐与广告；自定义供应商、网站导入、账户认证和其他应用功能沿用上游。
+基于 [官方 {data['upstream_tag']}]({data['upstream_release_url']})，移除官方内置供应商推荐与广告，仅加入 CodexZH（`api.codexzh.com`）与 CcodeZH（`api.ccodezh.com`）两个自有供应商预设；自定义供应商、网站导入、账户认证和其他应用功能沿用上游。预设不含 API Key，选择后由使用者填写自己的 Key 并保存。
 
 {updater_note}
 
@@ -481,11 +601,58 @@ def publish(directory: Path) -> None:
             fail(f"Release upload is incomplete: {name}; draft remains unpublished")
     subprocess.run(["gh", "release", "edit", tag, "--repo", repository, "--notes-file", str(notes), "--draft=false", "--prerelease=false", "--latest"], check=True)
     print(f"Published https://github.com/{repository}/releases/tag/{tag}")
+    verify_public_release(data, directory)
+
+
+def maintain_schedule() -> None:
+    """Append a monthly check record so a public repository remains active.
+
+    This uses the Contents API's existing blob SHA as a write lease. It only
+    updates one JSON status file; it never resets branches or edits source.
+    """
+    if os.environ.get("GITHUB_EVENT_NAME") != "schedule":
+        print("Periodic repository activity is only recorded for scheduled runs")
+        return
+    repository = os.environ["GITHUB_REPOSITORY"]
+    repo = api(f"/repos/{repository}")
+    if repo.get("private", True):
+        print("Private repositories do not need a public-workflow inactivity record")
+        return
+    branch = repo["default_branch"]
+    path = f"/repos/{repository}/contents/.clean/check-state.json"
+    current = api(path + "?ref=" + urllib.parse.quote(branch, safe=""), allow_404=True)
+    now = dt.datetime.now(dt.timezone.utc)
+    if current:
+        content = json.loads(base64.b64decode(current["content"]).decode("utf-8"))
+        last = dt.datetime.fromisoformat(content["checked_at"].replace("Z", "+00:00"))
+        if last.tzinfo is None or last > now:
+            fail("Periodic check timestamp is invalid; refusing to overwrite it")
+        if (now - last).total_seconds() < 30 * 24 * 60 * 60:
+            print("Periodic check record is less than 30 days old; no commit needed")
+            return
+    content = {
+        "checked_at": now.isoformat().replace("+00:00", "Z"),
+        "workflow_run": f"https://github.com/{repository}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+        "prepare_result": os.environ.get("PREPARE_RESULT", "unknown"),
+        "purpose": "Record the periodic upstream check and prevent the 60-day inactivity timeout for public scheduled workflows.",
+    }
+    encoded = base64.b64encode((json.dumps(content, ensure_ascii=False, indent=2) + "\n").encode("utf-8")).decode("ascii")
+    payload = {
+        "message": "chore: record monthly upstream check [skip ci]",
+        "branch": branch,
+        "content": encoded,
+    }
+    if current:
+        payload["sha"] = current["sha"]
+    payload_path = STATE / "check-state-update.json"
+    write_json(payload_path, payload)
+    subprocess.run(["gh", "api", "--method", "PUT", path, "--input", str(payload_path), "--silent"], check=True)
+    print("Recorded monthly repository activity without changing application source")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("detect", "configure", "test", "archive", "unpack", "collect", "publish"))
+    parser.add_argument("command", choices=("detect", "configure", "test", "archive", "unpack", "collect", "publish", "maintain-schedule"))
     parser.add_argument("--source", type=Path, default=Path("source"))
     parser.add_argument("--platform", choices=PLATFORMS)
     parser.add_argument("--assets", type=Path, default=Path("release-assets"))
@@ -506,6 +673,8 @@ def main() -> None:
         collect(args.source, args.platform, args.assets)
     elif args.command == "publish":
         publish(args.assets)
+    elif args.command == "maintain-schedule":
+        maintain_schedule()
 
 
 if __name__ == "__main__":

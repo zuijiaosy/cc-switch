@@ -35,7 +35,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Validate release automation
-        run: python -m unittest discover -s .clean/tests -v
+        run: |
+          python -m unittest discover -s .clean/tests -v
+          node --test .clean/tests/setup-updates.test.mjs
       - name: Resolve new official stable release
         id: detect
         env:
@@ -323,3 +325,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python .clean/scripts/release.py publish
+
+  maintain-schedule:
+    name: Record monthly upstream check
+    needs: prepare
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Maintain public repository schedule activity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+        # A single status-file commit at most every 30 days prevents GitHub's
+        # 60-day public-repository inactivity timeout. No source or workflow
+        # files are changed, and the Contents API uses the current blob SHA.
+        run: python .clean/scripts/release.py maintain-schedule

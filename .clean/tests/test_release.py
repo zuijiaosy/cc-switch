@@ -1,6 +1,7 @@
 """Release gates: never ship a partial build or silently use the official updater."""
 
 import base64
+import datetime as dt
 import importlib.util
 import json
 import os
@@ -14,8 +15,8 @@ release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
 
 
-def public_key():
-    key = base64.b64encode(b"Ed" + bytes(40)).decode("ascii")
+def public_key(value=0):
+    key = base64.b64encode(b"Ed" + bytes([value]) * 40).decode("ascii")
     return base64.b64encode(f"untrusted comment: test public key\n{key}\n".encode()).decode("ascii")
 
 
@@ -36,8 +37,14 @@ class ReleaseGates(unittest.TestCase):
             "HAS_SIGNING_KEY": "false",
         })
         self.environment.start()
+        # Legacy manual-release fixtures remain useful for draft recovery gates.
+        # Strict signed-mode behavior has dedicated tests below.
+        self.settings = {"upstream_repository": "farion1231/cc-switch", "release_revision": 1, "require_signed_updates": False}
+        self.config_patch = patch.object(release, "config", return_value=self.settings)
+        self.config_patch.start()
 
     def tearDown(self):
+        self.config_patch.stop()
         self.environment.stop()
         self.state_patch.stop()
         self.temp.cleanup()
@@ -183,6 +190,109 @@ class ReleaseGates(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "Malformed updater signature"):
                 release.verify_signatures(data, assets, {"app.msi.sig"})
             run.assert_not_called()
+
+    def signed_data(self):
+        return dict(self.data(), revision=2, release_tag="clean-v4.0.35-r2", signed_updates=True,
+                    updater_public_key=public_key(), updater_endpoint="https://github.com/example/cc-switch/releases/latest/download/latest.json")
+
+    def previous_release(self, data):
+        return {
+            "tag_name": data["release_tag"],
+            "assets": [{"name": "clean-build-provenance.json", "browser_download_url":
+                        f"https://github.com/example/cc-switch/releases/download/{data['release_tag']}/clean-build-provenance.json"}],
+        }
+
+    def remote_manifest(self, data):
+        base = f"https://github.com/{data['repository']}/releases/download/{data['release_tag']}"
+        return {"version": data["version"], "platforms": {
+            platform: {"url": f"{base}/{name}", "signature": "signed-test-fixture"}
+            for platform, name in release.updater_files(data).items()
+        }}
+
+    def test_required_signing_never_falls_back_to_unsigned(self):
+        self.settings["require_signed_updates"] = True
+        with patch.object(release, "find_release", return_value=None), patch.object(release, "api", return_value=self.upstream()):
+            with patch.object(release, "resolve_commit") as resolve:
+                with self.assertRaisesRegex(SystemExit, "unsigned fallback is forbidden"):
+                    release.detect()
+                resolve.assert_not_called()
+
+    def test_unsigned_r1_can_bootstrap_signed_r2_without_changing_app_version(self):
+        old, new = self.data(), self.signed_data()
+        with patch.object(release, "api", return_value=self.previous_release(old)), patch.object(release, "public_json", return_value=old):
+            release.check_release_continuity(new)
+        self.assertEqual(old["version"], new["version"])
+
+    def test_unexpected_signing_key_rotation_is_blocked(self):
+        old = self.signed_data()
+        new = dict(old, version="4.0.36", upstream_tag="v4.0.36", release_tag="clean-v4.0.36-r2", updater_public_key=public_key(1))
+        with patch.object(release, "api", return_value=self.previous_release(old)), patch.object(release, "public_json", return_value=old):
+            with self.assertRaisesRegex(SystemExit, "differs from the previous signed release"):
+                release.check_release_continuity(new)
+
+    def test_signed_stream_cannot_downgrade_application_version(self):
+        new = self.signed_data()
+        old = dict(new, version="4.0.36", upstream_tag="v4.0.36", release_tag="clean-v4.0.36-r2")
+        with patch.object(release, "api", return_value=self.previous_release(old)), patch.object(release, "public_json", return_value=old):
+            with self.assertRaisesRegex(SystemExit, "older application version"):
+                release.check_release_continuity(new)
+
+    def test_signed_stream_accepts_new_official_version_with_same_key(self):
+        old = self.signed_data()
+        new = dict(old, version="4.0.36", upstream_tag="v4.0.36", release_tag="clean-v4.0.36-r2")
+        with patch.object(release, "api", return_value=self.previous_release(old)), patch.object(release, "public_json", return_value=old):
+            release.check_release_continuity(new)
+
+    def test_public_update_check_recovers_from_temporary_cdn_lag(self):
+        data = self.signed_data()
+        manifest = self.remote_manifest(data)
+        with patch.object(release, "public_json", side_effect=[RuntimeError("CDN not ready"), manifest, manifest]):
+            with patch.object(release, "public_asset_size", return_value=1) as head, patch.object(release.time, "sleep") as sleep:
+                release.verify_public_release(data)
+                sleep.assert_called_once_with(3)
+                self.assertEqual(head.call_count, 9)
+
+    def test_public_manifest_cannot_redirect_clients_back_to_official_release(self):
+        data = self.signed_data()
+        manifest = self.remote_manifest(data)
+        manifest["platforms"]["darwin-aarch64"]["url"] = "https://github.com/farion1231/cc-switch/releases/download/v4.0.35/official.tar.gz"
+        with patch.object(release, "public_json", return_value=manifest), patch.object(release.time, "sleep") as sleep:
+            with self.assertRaisesRegex(SystemExit, "outside this release"):
+                release.verify_public_release(data)
+            self.assertEqual(sleep.call_count, len(release.PUBLIC_CHECK_DELAYS) - 1)
+            self.assertTrue(all(item.args[0] <= 60 for item in sleep.call_args_list))
+
+    def test_already_published_signed_release_rechecks_feed_without_rebuild(self):
+        self.settings.update(require_signed_updates=True, release_revision=2)
+        with patch.dict(os.environ, {"TAURI_PUBLIC_KEY": public_key(), "HAS_SIGNING_KEY": "true"}):
+            with patch.object(release, "api", side_effect=[self.upstream(), {"private": False}]), patch.object(release, "find_release", return_value={"draft": False}):
+                with patch.object(release, "check_release_continuity"), patch.object(release, "verify_public_release") as verify:
+                    with patch.object(release, "resolve_commit") as resolve, patch.object(release, "output") as output:
+                        release.detect()
+                        verify.assert_called_once()
+                        resolve.assert_not_called()
+                        output.assert_called_once_with("build", "false")
+
+    def test_monthly_check_only_updates_status_file_with_existing_blob_lease(self):
+        last = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=31)
+        current = {"sha": "c" * 40, "content": base64.b64encode(json.dumps({"checked_at": last.isoformat()}).encode()).decode()}
+        with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "schedule", "GITHUB_RUN_ID": "1234", "PREPARE_RESULT": "success"}):
+            with patch.object(release, "api", side_effect=[{"private": False, "default_branch": "main"}, current]), patch.object(release.subprocess, "run") as run:
+                release.maintain_schedule()
+                command = run.call_args.args[0]
+                self.assertEqual(command[:5], ["gh", "api", "--method", "PUT", "/repos/example/cc-switch/contents/.clean/check-state.json"])
+                payload = json.loads((self.state / "check-state-update.json").read_text())
+                self.assertEqual(payload["sha"], current["sha"])
+                self.assertEqual(payload["branch"], "main")
+                self.assertIn("[skip ci]", payload["message"])
+
+    def test_recent_monthly_check_creates_no_commit(self):
+        last = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=20)
+        current = {"sha": "c" * 40, "content": base64.b64encode(json.dumps({"checked_at": last.isoformat()}).encode()).decode()}
+        with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "schedule", "GITHUB_RUN_ID": "1234"}):
+            with patch.object(release, "api", side_effect=[{"private": False, "default_branch": "main"}, current]), patch.object(release.subprocess, "run") as run:
+                release.maintain_schedule()
+                run.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,12 +1,14 @@
 {
   "upstream_repository": "farion1231/cc-switch",
-  "release_revision": 1,
+  "release_revision": 2,
+  "require_signed_updates": true,
   "test_paths": [
     "tests/components/CleanProviders.test.tsx",
     "tests/components/modelMetadataFill.test.ts",
     "tests/config/presetModelMetadata.test.ts",
     "tests/utils/deepLinkConfigPreview.test.ts",
     "src/utils/deeplinkRisk.test.ts",
-    "tests/config/whatsNewEntries.test.ts"
+    "tests/config/whatsNewEntries.test.ts",
+    "tests/components/OwnedProviderForms.test.tsx"
   ]
 }
