@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 SPEC = importlib.util.spec_from_file_location("clean_release", Path(__file__).resolve().parents[1] / "scripts/release.py")
 release = importlib.util.module_from_spec(SPEC)
@@ -50,23 +50,97 @@ class ReleaseGates(unittest.TestCase):
 
     def test_private_signed_release_is_rejected_before_build(self):
         with patch.dict(os.environ, {"TAURI_PUBLIC_KEY": public_key(), "HAS_SIGNING_KEY": "true"}):
-            with patch.object(release, "api", side_effect=[self.upstream(), None, None]):
+            with patch.object(release, "find_release", return_value=None), patch.object(release, "api", side_effect=[self.upstream(), None]):
                 with self.assertRaisesRegex(SystemExit, "publicly readable"):
                     release.detect()
         self.assertFalse((self.state / "release.json").exists())
 
     def test_partial_signing_configuration_is_not_silently_downgraded(self):
         with patch.dict(os.environ, {"TAURI_PUBLIC_KEY": public_key()}):
-            with patch.object(release, "api", side_effect=[self.upstream(), None]):
+            with patch.object(release, "find_release", return_value=None), patch.object(release, "api", return_value=self.upstream()):
                 with self.assertRaisesRegex(SystemExit, "Partial updater configuration"):
                     release.detect()
 
     def test_existing_published_release_is_not_rebuilt_or_overwritten(self):
-        with patch.object(release, "api", side_effect=[self.upstream(), {"draft": False}]) as api:
+        with patch.object(release, "find_release", return_value={"draft": False}), patch.object(release, "api", return_value=self.upstream()) as api:
             with patch.object(release, "output") as output:
                 release.detect()
                 output.assert_called_once_with("build", "false")
-                self.assertEqual(api.call_count, 2)
+                self.assertEqual(api.call_count, 1)
+
+    def test_draft_lookup_pages_releases_then_reads_canonical_id(self):
+        tag = "clean-v4.0.35-r1"
+        draft = {"id": 450838070, "tag_name": tag, "draft": True, "target_commitish": "a" * 40}
+        first_page = [{"id": i + 1, "tag_name": f"v0.0.{i}"} for i in range(100)]
+        with patch.object(release, "api", side_effect=[None, first_page, [draft], draft]) as api:
+            self.assertEqual(release.find_release("example/cc-switch", tag), draft)
+            self.assertEqual(api.call_args_list, [
+                call(f"/repos/example/cc-switch/releases/tags/{tag}", allow_404=True),
+                call("/repos/example/cc-switch/releases?per_page=100&page=1"),
+                call("/repos/example/cc-switch/releases?per_page=100&page=2"),
+                call("/repos/example/cc-switch/releases/450838070"),
+            ])
+
+    def test_release_lookup_returns_none_after_last_page(self):
+        with patch.object(release, "api", side_effect=[None, []]) as api:
+            self.assertIsNone(release.find_release("example/cc-switch", "missing"))
+            self.assertEqual(api.call_count, 2)
+
+    def test_published_release_lookup_uses_fast_tag_endpoint(self):
+        published = {"id": 123, "tag_name": "clean-v4.0.35-r1", "draft": False}
+        with patch.object(release, "api", return_value=published) as api:
+            self.assertEqual(release.find_release("example/cc-switch", published["tag_name"]), published)
+            api.assert_called_once_with("/repos/example/cc-switch/releases/tags/clean-v4.0.35-r1", allow_404=True)
+
+    def prepared_assets(self):
+        assets = self.root / "assets"
+        assets.mkdir()
+        source = self.state / "source.tar.gz"
+        source.write_bytes(b"already verified prepared source archive")
+        data = dict(self.data(), source_archive_sha256=release.sha256(source), automation_sha="a" * 40,
+                    upstream_sha="b" * 40, upstream_release_url=self.upstream()["html_url"])
+        for platform in release.PLATFORMS:
+            name = f"asset-{platform}.bin"
+            (assets / name).write_bytes(platform.encode())
+            release.write_json(assets / f"build-{platform}.json", {
+                "platform": platform, "source_archive_sha256": data["source_archive_sha256"],
+                "assets": [name], "macos_notarized": False,
+            })
+        return assets, data
+
+    def test_existing_draft_without_git_tag_resumes_by_target_commit(self):
+        assets, data = self.prepared_assets()
+        draft = {"id": 450838070, "draft": True, "tag_name": data["release_tag"], "target_commitish": data["automation_sha"]}
+        def after_upload(path, **kwargs):
+            self.assertEqual(path, "/repos/example/cc-switch/releases/450838070")
+            return dict(draft, assets=[{"name": p.name, "size": p.stat().st_size}
+                                       for p in assets.iterdir() if not p.name.startswith("build-")])
+        with patch.object(release, "read_state", return_value=data), patch.object(release, "find_release", return_value=draft):
+            with patch.object(release, "resolve_commit") as resolve, patch.object(release, "api", side_effect=after_upload):
+                with patch.object(release.subprocess, "run") as run:
+                    release.publish(assets)
+                    resolve.assert_not_called()
+                    commands = [item.args[0] for item in run.call_args_list]
+                    self.assertEqual([cmd[2] for cmd in commands], ["upload", "edit"])
+                    self.assertIn("--draft=false", commands[-1])
+
+    def test_mismatched_draft_target_blocks_upload_and_publication(self):
+        assets, data = self.prepared_assets()
+        draft = {"id": 450838070, "draft": True, "target_commitish": "another-commit"}
+        with patch.object(release, "read_state", return_value=data), patch.object(release, "find_release", return_value=draft):
+            with patch.object(release.subprocess, "run") as run:
+                with self.assertRaisesRegex(SystemExit, "another automation commit"):
+                    release.publish(assets)
+                run.assert_not_called()
+
+    def test_incomplete_upload_keeps_existing_draft_unpublished(self):
+        assets, data = self.prepared_assets()
+        draft = {"id": 450838070, "draft": True, "tag_name": data["release_tag"], "target_commitish": data["automation_sha"]}
+        with patch.object(release, "read_state", return_value=data), patch.object(release, "find_release", return_value=draft):
+            with patch.object(release, "api", return_value=dict(draft, assets=[])), patch.object(release.subprocess, "run") as run:
+                with self.assertRaisesRegex(SystemExit, "missing or stale attachments"):
+                    release.publish(assets)
+                self.assertEqual([item.args[0][2] for item in run.call_args_list], ["upload"])
 
     def test_manual_mode_removes_all_official_update_endpoints(self):
         source = self.root / "source"

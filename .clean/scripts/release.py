@@ -62,6 +62,37 @@ def api(path: str, *, anonymous: bool = False, allow_404: bool = False) -> objec
         fail(f"GitHub API {path}: HTTP {error.code}")
 
 
+def find_release(repository: str, tag: str) -> dict | None:
+    """Find a published release or an authenticated draft with this exact tag.
+
+    GitHub's release-by-tag endpoint does not return drafts. Drafts also need not
+    have a Git tag yet, so find them in the paginated release collection and read
+    their canonical resource by ID instead of trying to resolve a Git ref.
+    """
+    found = api(f"/repos/{repository}/releases/tags/{tag}", allow_404=True)
+    if found is not None:
+        return found
+    page = 1
+    while True:
+        releases = api(f"/repos/{repository}/releases?per_page=100&page={page}")
+        if not isinstance(releases, list):
+            fail("Unexpected GitHub release collection response")
+        matches = [item for item in releases if item.get("tag_name") == tag]
+        if len(matches) > 1:
+            fail(f"Multiple releases found for tag {tag}")
+        if matches:
+            release_id = matches[0]["id"]
+            if not isinstance(release_id, int) or isinstance(release_id, bool) or release_id < 1:
+                fail("Unexpected GitHub release ID")
+            found = api(f"/repos/{repository}/releases/{release_id}")
+            if found.get("tag_name") != tag:
+                fail("GitHub release tag changed during lookup")
+            return found
+        if len(releases) < 100:
+            return None
+        page += 1
+
+
 def output(name: str, value: str) -> None:
     if "\n" in value or "\r" in value:
         fail("Refusing a multiline workflow output")
@@ -131,7 +162,7 @@ def detect() -> None:
     if release["draft"] or release["prerelease"] or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
         fail("Only an official stable vMAJOR.MINOR.PATCH release may be built")
     clean_tag = f"clean-{tag}-r{revision}"
-    existing = api(f"/repos/{repository}/releases/tags/{clean_tag}", allow_404=True)
+    existing = find_release(repository, clean_tag)
     if existing and not existing["draft"]:
         print(f"Already published: {clean_tag}; increment release_revision for a new clean-only build.")
         output("build", "false")
@@ -426,17 +457,22 @@ def publish(directory: Path) -> None:
     notes = STATE / "release-notes.md"
     notes.write_text(body, encoding="utf-8")
     repository, tag = data["repository"], data["release_tag"]
-    existing = api(f"/repos/{repository}/releases/tags/{tag}", allow_404=True)
+    existing = find_release(repository, tag)
     if existing and not existing["draft"]:
         fail("Refusing to overwrite an already published release")
     if existing:
-        actual_commit = resolve_commit(repository, tag)
-        if actual_commit != data["automation_sha"]:
-            fail("Existing draft tag points at another automation commit; increment release_revision instead of moving the tag")
+        if existing.get("target_commitish") != data["automation_sha"]:
+            fail("Existing draft targets another automation commit; increment release_revision instead of moving the tag")
     else:
         subprocess.run(["gh", "release", "create", tag, "--repo", repository, "--target", data["automation_sha"], "--draft", "--title", f"CC Switch {data['upstream_tag']} Clean r{data['revision']}", "--notes-file", str(notes)], check=True)
+        existing = find_release(repository, tag)
+        if not existing or not existing["draft"] or existing.get("target_commitish") != data["automation_sha"]:
+            fail("Created draft is missing or has unexpected provenance; refusing to upload")
+    release_id = existing["id"]
     subprocess.run(["gh", "release", "upload", tag, "--repo", repository, "--clobber", *[str(directory / name) for name in sorted(all_assets)]], check=True)
-    uploaded = api(f"/repos/{repository}/releases/tags/{tag}")
+    uploaded = api(f"/repos/{repository}/releases/{release_id}")
+    if not uploaded["draft"] or uploaded["tag_name"] != tag or uploaded.get("target_commitish") != data["automation_sha"]:
+        fail("Draft release changed during upload; refusing to publish")
     actual_assets = {asset["name"]: asset["size"] for asset in uploaded["assets"]}
     if set(actual_assets) != all_assets:
         fail("Release draft contains missing or stale attachments; keep it unpublished and use a new clean revision")
