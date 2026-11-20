@@ -5,6 +5,7 @@ Layout under <bucket>/<prefix>/ (prefix defaults to "cc-switch"):
 
     releases/<clean-tag>/<asset>   immutable installers, checksums, provenance
     releases/<clean-tag>/downloads.json
+    releases/<clean-tag>/LICENSE.txt   upstream MIT notice taken from the verified source archive
     latest.json                    download manifest read by the static site
 
 Only installers and verification files are mirrored; Tauri updater-only assets
@@ -30,6 +31,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -50,6 +52,7 @@ sha256 = _shared.sha256
 SUMS, SUMS_SIG, PROVENANCE = _shared.SUMS, _shared.SUMS_SIG, _shared.PROVENANCE
 
 MANIFEST = "latest.json"
+LICENSE = "LICENSE.txt"
 RELEASE_MANIFEST = "downloads.json"
 CHUNK = 1024 * 1024
 IMMUTABLE = "public, max-age=31536000, immutable"
@@ -301,6 +304,22 @@ def verify_local(directory: Path, names: list[str], sizes: dict[str, int], setti
     return digests
 
 
+def extract_license(directory: Path, upstream_tag: str) -> Path:
+    """Ship the upstream copyright and MIT permission notice next to the
+    installers, taken from the checksum-verified clean source archive."""
+    archive = directory / f"CC-Switch-{upstream_tag}-Clean-Source.tar.gz"
+    with tarfile.open(archive, "r:gz") as stream:
+        member = next((item for item in stream.getmembers()
+                       if item.isfile() and item.name.lstrip("./") == "LICENSE"), None)
+        require(member is not None and member.size < 64 * 1024, "Clean source archive has no top-level LICENSE")
+        text = stream.extractfile(member).read()
+    require(b"MIT License" in text and b"Permission is hereby granted" in text and b"Copyright" in text,
+            "Upstream LICENSE is not the expected MIT notice")
+    path = directory / LICENSE
+    path.write_bytes(text)
+    return path
+
+
 def build_manifest(release: dict, settings: Settings, names: list[str], sizes: dict[str, int],
                    digests: dict[str, str], provenance: dict) -> dict:
     tag = release["tag_name"]
@@ -328,6 +347,8 @@ def build_manifest(release: dict, settings: Settings, names: list[str], sizes: d
         "signed": SUMS_SIG in names,
         "macos_notarized": bool(provenance.get("macos_notarized")),
         "checksums_url": settings.public_url("releases", tag, SUMS),
+        "license": "MIT",
+        "license_url": settings.public_url("releases", tag, LICENSE),
         "files": files,
     }
 
@@ -355,7 +376,7 @@ def upload_release(s3: S3, settings: Settings, tag: str, directory: Path, names:
             same = existing[key] == sizes[name] and public_digest(settings.public_url("releases", tag, name)) == (sizes[name], digests[name])
             require(same, f"Refusing to overwrite different existing object: {key}")
             continue
-        attachment = name not in (SUMS, SUMS_SIG, PROVENANCE)
+        attachment = name not in (SUMS, SUMS_SIG, PROVENANCE, LICENSE)
         s3.put(directory / name, key, cache_control=IMMUTABLE, digest=digests[name], attachment=attachment)
         uploaded += 1
         print(f"Uploaded {key} ({sizes[name]} bytes)")
@@ -397,7 +418,7 @@ def publish_manifest(s3: S3, settings: Settings, manifest: dict, directory: Path
 
 def already_mirrored(s3: S3, settings: Settings, tag: str, names: list[str], sizes: dict[str, int]) -> bool:
     existing = s3.list(settings.key("releases", tag) + "/")
-    for name in names + [RELEASE_MANIFEST]:
+    for name in names + [RELEASE_MANIFEST, LICENSE]:
         size = existing.get(settings.key("releases", tag, name))
         if size is None or (name in sizes and size != sizes[name]):
             return False
@@ -423,8 +444,11 @@ def synchronize(settings: Settings, s3: S3, tag: str | None) -> None:
         digests = verify_local(directory, names, sizes, settings)
         provenance = json.loads((directory / PROVENANCE).read_text(encoding="utf-8"))
         manifest = build_manifest(release, settings, names, sizes, digests, provenance)
-        uploaded = upload_release(s3, settings, tag, directory, names, sizes, digests)
-        verify_public(settings, tag, names, sizes, digests)
+        license_path = extract_license(directory, f"v{version}")
+        sizes[LICENSE], digests[LICENSE] = license_path.stat().st_size, sha256(license_path)
+        published = names + [LICENSE]
+        uploaded = upload_release(s3, settings, tag, directory, published, sizes, digests)
+        verify_public(settings, tag, published, sizes, digests)
         publish_manifest(s3, settings, manifest, directory, promote=promote)
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:

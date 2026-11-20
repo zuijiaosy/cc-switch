@@ -7,6 +7,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -49,9 +50,25 @@ class FakeS3:
         self.puts.append((key, cache_control, attachment))
 
 
-def release_files(tag=TAG, signed=False):
+MIT_TEXT = b"MIT License\n\nCopyright (c) 2025 Upstream Author\n\nPermission is hereby granted, free of charge...\n"
+
+
+def source_archive(license_text=MIT_TEXT):
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as stream:
+        for name, body in (("./README.md", b"readme\n"), ("./LICENSE", license_text)):
+            if body is None:
+                continue
+            info = tarfile.TarInfo(name)
+            info.size = len(body)
+            stream.addfile(info, io.BytesIO(body))
+    return buffer.getvalue()
+
+
+def release_files(tag=TAG, signed=False, license_text=MIT_TEXT):
     version = mirror.parse_tag(tag)[0]
     files = {name.replace("v4.0.35", f"v{version}"): f"{name} payload\n".encode() for name in INSTALLERS}
+    files[f"CC-Switch-v{version}-Clean-Source.tar.gz"] = source_archive(license_text)
     files.update({name.replace("v4.0.35", f"v{version}"): b"updater\n" for name in UPDATER_ONLY})
     files[mirror.PROVENANCE] = json.dumps({"release_tag": tag, "repository": ENV["GITHUB_REPOSITORY"],
                                            "upstream_repository": "farion1231/cc-switch", "macos_notarized": False}).encode()
@@ -146,6 +163,24 @@ class SyncMinioTests(unittest.TestCase):
         self.assertEqual(caches["cc-switch/latest.json"], mirror.MUTABLE)
         self.assertEqual(caches[f"cc-switch/releases/{TAG}/CC-Switch-v4.0.35-macOS.dmg"], mirror.IMMUTABLE)
         self.assertNotIn(f"cc-switch/releases/{TAG}/latest.json", s3.objects)
+
+    def test_upstream_license_is_published_with_each_release(self):
+        s3 = FakeS3()
+        self.run_sync(s3, release_files())
+        self.assertEqual(s3.objects[f"cc-switch/releases/{TAG}/LICENSE.txt"], MIT_TEXT)
+        manifest = json.loads(s3.objects["cc-switch/latest.json"])
+        self.assertEqual(manifest["license"], "MIT")
+        self.assertEqual(manifest["license_url"], f"https://oss.example.com/downloads/cc-switch/releases/{TAG}/LICENSE.txt")
+        attachments = {key: attachment for key, _, attachment in s3.puts}
+        self.assertFalse(attachments[f"cc-switch/releases/{TAG}/LICENSE.txt"])
+
+    def test_missing_or_unexpected_license_stops_before_upload(self):
+        for text in (None, b"All rights reserved\n"):
+            with self.subTest(text=text):
+                s3 = FakeS3()
+                with self.assertRaises(mirror.SyncError):
+                    self.run_sync(s3, release_files(license_text=text))
+                self.assertEqual(s3.puts, [])
 
     def test_second_run_is_a_no_op(self):
         s3, files = FakeS3(), release_files()
