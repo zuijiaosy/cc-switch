@@ -490,8 +490,14 @@ class Sftp:
         require(created.returncode == 0, f"Cannot create a new SFTP batch: {created.stderr.strip()[:3000]}")
         # We have acknowledged ownership of this new directory, and READY has
         # never been attempted. Cleanup is safe only during this asset phase.
-        commands = [f"put {sftp_quote(str(release.directory / name))} {sftp_quote(remote + '/' + name)}"
-                    for name in sorted(release.sizes)]
+        # OpenSSH put carries local file permissions: our private local 0600
+        # files stay 0600 even with the server's 0007 umask. Explicitly grant
+        # the staging group access for the separate publisher account. Keep
+        # setgid on the batch so every file inherits the staging parent group.
+        commands = [f"chmod 2770 {sftp_quote(remote)}"]
+        for name in sorted(release.sizes):
+            commands.extend((f"put {sftp_quote(str(release.directory / name))} {sftp_quote(remote + '/' + name)}",
+                             f"chmod 0660 {sftp_quote(remote + '/' + name)}"))
         try:
             result = self.run("\n".join(commands) + "\n")
             require(result.returncode == 0, f"SFTP asset upload failed: {result.stderr.strip()[:3000]}")
@@ -508,6 +514,7 @@ class Sftp:
         # A disconnected READY transfer has an ambiguous result: it may already
         # have reached the publisher. Never remove or modify the batch here.
         result = self.run(f"put {sftp_quote(str(ready))} {sftp_quote(remote + '/READY.json.part')}\n"
+                          f"chmod 0660 {sftp_quote(remote + '/READY.json.part')}\n"
                           f"rename {sftp_quote(remote + '/READY.json.part')} {sftp_quote(remote + '/READY.json')}\n", timeout=60)
         require(result.returncode == 0, f"SFTP READY submission was not acknowledged; the batch is preserved: {result.stderr.strip()[:3000]}")
 

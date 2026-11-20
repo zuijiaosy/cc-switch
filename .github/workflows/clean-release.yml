@@ -37,9 +37,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install release test signature verifier
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends minisign
+        run: bash .clean/scripts/install-minisign.sh "$RUNNER_TEMP/cc-switch-tools"
       - name: Validate release automation
         run: |
           python -m unittest discover -s .clean/tests -v
@@ -333,9 +331,7 @@ jobs:
           merge-multiple: true
       - name: Install signature verifier
         if: needs.prepare.outputs.signed_updates == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends minisign
+        run: bash .clean/scripts/install-minisign.sh "$RUNNER_TEMP/cc-switch-tools"
       - name: Verify all assets and publish atomically from a draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -364,8 +360,8 @@ jobs:
           python-version: '3.12'
       - name: Install upload and signature verification tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends openssh-client minisign
+          bash .clean/scripts/install-minisign.sh "$RUNNER_TEMP/cc-switch-tools"
+          command -v sftp
       - name: Sync a complete signed release and verify HTTPS downloads
         env:
           GH_TOKEN: ${{ github.token }}

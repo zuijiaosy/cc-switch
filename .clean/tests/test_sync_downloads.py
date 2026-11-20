@@ -29,6 +29,8 @@ PUBLIC_KEY = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkgNjAyMDlGQjgxRk
 SIGNATURE = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIG1pbmlzaWduIHNlY3JldCBrZXkKUlVSM01jRWZ1SjhnWU5FY1pPNHErNWxuZmRud09pUEVlbUt3d1NNZVUyeUc0NkpQc3lYc2dvbnM2bW5yaldXY2MrSHFGNjdFV0JabFZRdGFNUTA5VzQ0MjVjeTlZM2R4bndBPQp0cnVzdGVkIGNvbW1lbnQ6IENDIFN3aXRjaCB1bml0IHRlc3QgZml4dHVyZQpFRzZOY2FYVVROL3R3Ry8zRHJXYmxwVEEyZFRIQWFHbllKUUoyakhFL1NMeEozK1VHNXlFSkI4UHBXOWFRbE9DYlRrUWY5NjBodWlyS0Jzb3RUL2JCQT09Cg=="
 SIGNED_PAYLOAD = b"CC Switch signed checksum fixture\n"
 HOST_KEY = base64.b64encode(b"host-key-fixture-material-for-mocked-sftp").decode()
+SFTP_SERVER = next((path for path in ("/usr/lib/openssh/sftp-server", "/usr/libexec/openssh/sftp-server",
+                                    "/usr/libexec/sftp-server") if Path(path).is_file()), None)
 
 
 def encoded(value):
@@ -268,14 +270,61 @@ class Boundaries(unittest.TestCase):
         self.assertNotIn(self.settings.private_key, repr(run.call_args_list))
         self.assertEqual((self.root / "ssh/identity").stat().st_mode & 0o777, 0o600)
         self.assertNotIn("READY.json", run.call_args_list[1].kwargs["input"])
+        remote = "/cc-switch/clean-v4.0.35-r2-123-1-abcd1234"
+        asset_commands = [shlex.split(line) for line in run.call_args_list[1].kwargs["input"].splitlines()]
+        self.assertEqual(asset_commands[0], ["chmod", "2770", remote])
+        for index, name in enumerate(sorted(release.sizes)):
+            self.assertEqual(asset_commands[1 + index * 2], ["put", str(release.directory / name), remote + "/" + name])
+            self.assertEqual(asset_commands[2 + index * 2], ["chmod", "0660", remote + "/" + name])
+        self.assertEqual(len(asset_commands), 1 + len(release.sizes) * 2)
         self.assertEqual(run.call_args_list[2].kwargs["input"].count("put "), 1)
         marker_commands = run.call_args_list[2].kwargs["input"].splitlines()
         self.assertTrue(marker_commands[0].endswith('/READY.json.part"'))
-        self.assertTrue(marker_commands[1].startswith("rename "))
-        self.assertTrue(marker_commands[1].endswith('/READY.json"'))
+        self.assertEqual(shlex.split(marker_commands[1]), ["chmod", "0660", remote + "/READY.json.part"])
+        self.assertTrue(marker_commands[2].startswith("rename "))
+        self.assertTrue(marker_commands[2].endswith('/READY.json"'))
+        self.assertEqual(len(marker_commands), 3)
         ready = json.loads((self.root / "ssh/READY.json").read_text())
         self.assertEqual(ready["files_count"], len(release.sizes))
         self.assertEqual(ready["total_bytes"], sum(release.sizes.values()))
+
+    @unittest.skipUnless(SFTP_SERVER and shutil.which("sftp"), "OpenSSH sftp-server is required for local permission integration")
+    def test_actual_local_sftp_preserves_private_sources_and_grants_publisher_group_access(self):
+        release = self.release()
+        release.directory.chmod(0o700)
+        for name in release.sizes:
+            (release.directory / name).chmod(0o600)
+        inbox = self.root / "staging-inbox"
+        inbox.mkdir()
+        inbox.chmod(0o2770)
+        batch = "clean-v4.0.35-r2-123-1-abcd1234"
+        previous_umask = os.umask(0o077)
+        try:
+            sftp = sync.Sftp(self.settings, self.root / "ssh")
+            def local_sftp(batch_text, *, timeout=1800):
+                # -D speaks real SFTP over pipes to a local server. Only map
+                # the chroot path into this temporary fixture; no SSH, network,
+                # production credentials, or remote shell are involved.
+                local_batch = batch_text.replace('"/cc-switch/', '"' + str(inbox) + "/")
+                return subprocess.run(["sftp", "-D", SFTP_SERVER + " -u 0007", "-b", "-"],
+                                      input=local_batch, text=True, capture_output=True, timeout=timeout, check=False)
+            with patch.object(sftp, "run", side_effect=local_sftp):
+                sftp.upload(release, batch)
+        finally:
+            os.umask(previous_umask)
+        remote = inbox / batch
+        self.assertEqual(remote.stat().st_mode & 0o7777, 0o2770)
+        self.assertEqual(remote.stat().st_gid, inbox.stat().st_gid)
+        self.assertEqual({path.name for path in remote.iterdir()}, set(release.sizes) | {"READY.json"})
+        for path in remote.iterdir():
+            self.assertEqual(path.stat().st_mode & 0o7777, 0o660, path.name)
+            self.assertEqual(path.stat().st_gid, inbox.stat().st_gid, path.name)
+        for name in release.sizes:
+            self.assertEqual((release.directory / name).stat().st_mode & 0o777, 0o600)
+            self.assertEqual((remote / name).read_bytes(), (release.directory / name).read_bytes())
+        self.assertEqual((sftp.directory / "READY.json").stat().st_mode & 0o777, 0o600)
+        self.assertEqual((sftp.directory / "identity").stat().st_mode & 0o777, 0o600)
+        self.assertEqual(release.directory.stat().st_mode & 0o777, 0o700)
 
     def test_interrupted_asset_upload_cleans_only_owned_batch_and_preserves_error(self):
         release = self.release()
@@ -461,7 +510,7 @@ class ProtocolIntegration(unittest.TestCase):
     """Real crypto and publisher filesystem; HTTP and SFTP are local stubs.
 
     This verifies the shared wire/data protocol, not production TLS, SSH,
-    permissions, bandwidth, DNS, systemd or the nginx deployment.
+    production permissions, bandwidth, DNS, systemd or the Caddy deployment.
     """
 
     def setUp(self):
@@ -591,15 +640,22 @@ class ProtocolIntegration(unittest.TestCase):
                     remote_path(arguments[0]).mkdir()
                 elif command == "put":
                     shutil.copyfile(arguments[0], remote_path(arguments[1]))
+                    remote_path(arguments[1]).chmod(Path(arguments[0]).stat().st_mode & 0o777)
                     if arguments[1].endswith("/READY.json.part"):
                         self.assertEqual(self.publisher.once(), [], "A partial marker must not become visible to the scanner")
+                elif command == "chmod":
+                    remote_path(arguments[1]).chmod(int(arguments[0], 8))
                 elif command == "rename":
+                    self.assertEqual(remote_path(arguments[0]).stat().st_mode & 0o777, 0o660)
                     os.rename(remote_path(arguments[0]), remote_path(arguments[1]))
                 else:
                     self.fail(f"Unexpected command in local SFTP protocol stub: {command}")
             return subprocess.CompletedProcess([], 0, "", "")
         with patch.object(sftp, "run", side_effect=execute):
             sftp.upload(release, batch)
+        self.assertEqual((self.publisher.inbox / batch).stat().st_mode & 0o7777, 0o2770)
+        for path in (self.publisher.inbox / batch).iterdir():
+            self.assertEqual(path.stat().st_mode & 0o7777, 0o660, path.name)
         receipt = self.publisher.once()[0]
         sync.validate_receipt(receipt, release)
         self.assertFalse((self.publisher.inbox / batch).exists())

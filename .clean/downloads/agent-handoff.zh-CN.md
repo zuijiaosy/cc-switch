@@ -48,7 +48,7 @@ node .clean/scripts/setup-updates.mjs --prepare-only
 - `cc-switch-upload`：仅能通过 `internal-sftp` 访问 chroot；只能写自己的暂存区，只读回执。
 - `cc-switch-publish`：无登录 shell；systemd 发布程序使用。可读写暂存区、自己的工作目录和 `public/cc-switch`，没有 Caddy/Docker 管理权限。
 
-共享组为 `cc-switch-staging`。按以下权限建立目录；若同名账号已存在，先核对用途，不要覆盖现有账号：
+共享组为 `cc-switch-staging`，两个账号都必须加入这个补充组；分别验证其有效组，不能只依赖 systemd 服务里的 `SupplementaryGroups`。按以下权限建立目录；若同名账号已存在，先核对用途，不要覆盖现有账号：
 
 | 路径 | 所有者 / 组 | 权限 |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ node .clean/scripts/setup-updates.mjs --prepare-only
 | `public` | `root:root` | `0755` |
 | `public/cc-switch` | `cc-switch-publish:cc-switch-publish` | 目录 `0755`；公开文件 `0644` |
 
-上传使用 umask `0007`，让发布账号能够在终态后清理暂存文件。Caddy 只读挂载 `public`，不挂载 `incoming`、工作区、SSH 目录或 `/etc`。
+上传使用 umask `0007`，客户端在上传完成后显式设置共享组权限，让发布账号能够读取和清理暂存文件。`work/cc-switch` 与 `public/cc-switch/releases` 必须在同一文件系统，才能原子发布；`incoming` 可以使用单独的限额文件系统。Caddy 只读挂载 `public`，不挂载 `incoming`、工作区、SSH 目录或 `/etc`。
 
 **启用上传前必须落实硬容量限制。** 为上传账号配置文件系统用户/项目配额，或把暂存放在独立、有硬容量上限的文件系统；建议暂存总上限 2 GiB。发布程序的空闲空间检查不能限制一个正在进行的 SFTP 上传，不能把它当作配额替代品。不要为此格式化已有数据盘或贸然修改共享根分区；选择现有合适的数据卷并记录实际实现。
 
@@ -82,10 +82,11 @@ Match User cc-switch-upload
     PermitTTY no
     X11Forwarding no
     PermitTunnel no
-    PermitUserEnvironment no
     PermitUserRC no
 Match all
 ```
+
+同时核对全局有效配置 `PermitUserEnvironment no`；该指令不能放在 `Match` 块内。通常保留 OpenSSH 默认值即可，若现有全局配置开启了它，先评估现有用户再在任何 `Match` 之前调整，不能直接覆盖共享 SSH 配置。
 
 执行 `sshd -t` 和该用户的 `sshd -T -C ...` 检查后再 reload SSH。保留现有管理会话，验证该密钥能 SFTP 到 `/cc-switch`、能读 `/receipts`，不能写回执、不能访问公开目录、不能执行 shell。账号的 PAM/锁定状态也要实际验证，不能仅依据配置文本判定可登录。
 
@@ -94,6 +95,15 @@ Match all
 ## 第三步：安装发布程序和初始化身份
 
 hz 需要 Python 3.10+、OpenSSH 和 `minisign`。把本仓库 `.clean/server/` 的程序安装到 `/opt/cc-switch-clean/server/`，由 root 拥有且上传账号不可写。使用对应的 systemd service/timer 模板；每 30 秒扫描一次已完成批次。
+
+保留 service 中单一的 `ReadWritePaths=/srv/client-downloads`，由前述目录所有权限制发布账号的实际写入范围。不要拆成工作区、公开目录各一条：systemd 会建立分开的 bind mount，使跨目录原子重命名即使在同一磁盘上也可能报 `EXDEV`。
+
+若系统源没有 `minisign`（例如 Ubuntu 22.04），可使用仓库附带的官方固定版本安装器。它下载 minisign 0.12 的 Linux x86_64/aarch64 静态程序，并在解包前核对固定 SHA-256：
+
+```bash
+sudo bash .clean/scripts/install-minisign.sh /usr/local/bin
+/usr/local/bin/minisign -v
+```
 
 把第一步的公钥放到 `/etc/cc-switch-downloads/updater.pub`。公钥可以公开，但这个受信任副本仅 root 能修改。创建 `/etc/cc-switch-downloads/config.json`，将示例域名替换为实际值：
 

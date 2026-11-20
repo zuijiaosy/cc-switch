@@ -15,5 +15,7 @@ PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/srv/client-downloads/incoming/cc-switch /srv/client-downloads/incoming/receipts /srv/client-downloads/work/cc-switch /srv/client-downloads/public/cc-switch
+# Keep work -> public on one writable mount so atomic rename cannot hit EXDEV.
+# Root-owned ancestors and the documented POSIX permissions restrict each user.
+ReadWritePaths=/srv/client-downloads
 
