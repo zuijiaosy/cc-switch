@@ -33,9 +33,8 @@ class FakeS3:
         self.objects = dict(objects or {})
         self.puts = []
 
-    def head(self, key):
-        item = self.objects.get(key)
-        return None if item is None else {"ContentLength": len(item), "Metadata": {"sha256": hashlib.sha256(item).hexdigest()}}
+    def list(self, prefix):
+        return {key: len(body) for key, body in self.objects.items() if key.startswith(prefix)}
 
     def get(self, key, destination):
         if key not in self.objects:
@@ -179,11 +178,20 @@ class SyncMinioTests(unittest.TestCase):
     def test_existing_different_object_is_never_overwritten(self):
         files = release_files()
         key = f"cc-switch/releases/{TAG}/CC-Switch-v4.0.35-macOS.dmg"
-        s3 = FakeS3({key: b"something else"})
+        same_size = b"x" * len(files["CC-Switch-v4.0.35-macOS.dmg"])
+        s3 = FakeS3({key: same_size})
         with self.assertRaises(mirror.SyncError):
             self.run_sync(s3, files)
-        self.assertEqual(s3.objects[key], b"something else")
+        self.assertEqual(s3.objects[key], same_size)
         self.assertNotIn("cc-switch/latest.json", s3.objects)
+
+    def test_identical_existing_object_is_kept_and_upload_resumes(self):
+        files = release_files()
+        key = f"cc-switch/releases/{TAG}/CC-Switch-v4.0.35-macOS.dmg"
+        s3 = FakeS3({key: files["CC-Switch-v4.0.35-macOS.dmg"]})
+        self.run_sync(s3, files)
+        self.assertNotIn(key, [put[0] for put in s3.puts])
+        self.assertEqual(json.loads(s3.objects["cc-switch/latest.json"])["release_tag"], TAG)
 
     def test_older_release_never_moves_latest_backwards(self):
         s3 = FakeS3()

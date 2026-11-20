@@ -204,13 +204,14 @@ class S3:
             raise SyncError(f"aws {args[0]} {args[1]} failed: {result.stderr.strip()[-800:]}")
         return result
 
-    def head(self, key: str) -> dict | None:
-        result = self.run("s3api", "head-object", "--bucket", self.settings.bucket, "--key", key, check=False)
-        if result.returncode != 0:
-            if re.search(r"\(404\)|Not Found|NoSuchKey", result.stderr):
-                return None
-            raise SyncError(f"Cannot inspect s3://{self.settings.bucket}/{key}: {result.stderr.strip()[-800:]}")
-        return json.loads(result.stdout)
+    def list(self, prefix: str) -> dict[str, int]:
+        """Object sizes under a prefix. Deliberately not HeadObject: Cloudflare
+        forwards HEAD for cacheable extensions (.zip, .dmg, .gz…) to the origin
+        as GET, which breaks the SigV4 signature and returns 403."""
+        result = self.run("s3api", "list-objects-v2", "--bucket", self.settings.bucket, "--prefix", prefix,
+                          "--output", "json")
+        data = json.loads(result.stdout) if result.stdout.strip() else {}
+        return {item["Key"]: item["Size"] for item in data.get("Contents") or []}
 
     def get(self, key: str, destination: Path) -> bool:
         result = self.run("s3api", "get-object", "--bucket", self.settings.bucket, "--key", key, str(destination), check=False)
@@ -347,12 +348,11 @@ def current_manifest(s3: S3, settings: Settings, directory: Path) -> dict | None
 def upload_release(s3: S3, settings: Settings, tag: str, directory: Path, names: list[str],
                    sizes: dict[str, int], digests: dict[str, str]) -> int:
     uploaded = 0
+    existing = s3.list(settings.key("releases", tag) + "/")
     for name in names:
         key = settings.key("releases", tag, name)
-        existing = s3.head(key)
-        if existing is not None:
-            same = (existing.get("ContentLength") == sizes[name]
-                    and existing.get("Metadata", {}).get("sha256") == digests[name])
+        if key in existing:
+            same = existing[key] == sizes[name] and public_digest(settings.public_url("releases", tag, name)) == (sizes[name], digests[name])
             require(same, f"Refusing to overwrite different existing object: {key}")
             continue
         attachment = name not in (SUMS, SUMS_SIG, PROVENANCE)
@@ -379,11 +379,10 @@ def publish_manifest(s3: S3, settings: Settings, manifest: dict, directory: Path
     path.write_bytes(body)
     digest = hashlib.sha256(body).hexdigest()
     key = settings.key("releases", tag, RELEASE_MANIFEST)
-    existing = s3.head(key)
-    if existing is None:
+    if key not in s3.list(key):
         s3.put(path, key, cache_control=IMMUTABLE, digest=digest, attachment=False)
-    elif existing.get("Metadata", {}).get("sha256") != digest:
-        print(f"::warning::{key} already exists with different metadata; kept the original")
+    elif public_digest(settings.public_url("releases", tag, RELEASE_MANIFEST))[1] != digest:
+        print(f"::warning::{key} already exists with different content; kept the original")
     if not promote:
         return
     s3.put(path, settings.key(MANIFEST), cache_control=MUTABLE, digest=digest, attachment=False)
@@ -397,9 +396,10 @@ def publish_manifest(s3: S3, settings: Settings, manifest: dict, directory: Path
 
 
 def already_mirrored(s3: S3, settings: Settings, tag: str, names: list[str], sizes: dict[str, int]) -> bool:
+    existing = s3.list(settings.key("releases", tag) + "/")
     for name in names + [RELEASE_MANIFEST]:
-        head = s3.head(settings.key("releases", tag, name))
-        if head is None or (name in sizes and head.get("ContentLength") != sizes[name]):
+        size = existing.get(settings.key("releases", tag, name))
+        if size is None or (name in sizes and size != sizes[name]):
             return False
     return True
 
