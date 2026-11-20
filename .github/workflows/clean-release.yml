@@ -10,6 +10,7 @@ on:
     paths:
       - '.clean/**'
       - '.github/workflows/clean-release.yml'
+      - '.github/workflows/mirror-minio.yml'
 
 permissions:
   contents: read
@@ -374,6 +375,19 @@ jobs:
           DOWNLOAD_SSH_PRIVATE_KEY: ${{ secrets.DOWNLOAD_SSH_PRIVATE_KEY }}
           DOWNLOAD_SSH_KNOWN_HOSTS: ${{ secrets.DOWNLOAD_SSH_KNOWN_HOSTS }}
         run: python .clean/scripts/sync-downloads.py --tag "$RELEASE_TAG"
+
+  minio:
+    name: Mirror release to MinIO
+    needs: [prepare, publish]
+    # Also runs while signing is still awaiting setup, so the latest published
+    # release stays mirrored; the called job is skipped without MINIO_* config.
+    if: >-
+      always() && !cancelled() && needs.prepare.result == 'success' &&
+      (needs.prepare.outputs.build != 'true' || needs.publish.result == 'success')
+    uses: ./.github/workflows/mirror-minio.yml
+    with:
+      tag: ${{ needs.prepare.outputs.release_tag }}
+    secrets: inherit
 
   maintain-schedule:
     name: Record monthly upstream check

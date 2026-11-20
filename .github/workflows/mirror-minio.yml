@@ -1,0 +1,58 @@
+name: Mirror release to MinIO
+
+# Copies a published clean release into MinIO so the download site
+# (ccswitch.codexzh.com) can link to direct downloads. Disabled until the
+# MINIO_* variables/secrets exist. Runs after every clean release workflow and
+# can be started manually to retry or backfill a specific tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Clean release tag (empty = latest published release)'
+        required: false
+        default: ''
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Upload installers and download manifest
+    if: vars.MINIO_ENDPOINT != '' && vars.MINIO_BUCKET != ''
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    concurrency:
+      group: clean-minio-mirror
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install signature verifier
+        run: |
+          bash .clean/scripts/install-minisign.sh "$RUNNER_TEMP/cc-switch-tools"
+          aws --version
+      - name: Validate mirror script
+        run: python -m unittest discover -s .clean/tests -p 'test_sync_minio.py' -v
+      - name: Verify release and mirror to MinIO
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TAURI_PUBLIC_KEY: ${{ vars.TAURI_PUBLIC_KEY }}
+          MINIO_ENDPOINT: ${{ vars.MINIO_ENDPOINT }}
+          MINIO_BUCKET: ${{ vars.MINIO_BUCKET }}
+          MINIO_PREFIX: ${{ vars.MINIO_PREFIX }}
+          MINIO_PUBLIC_BASE_URL: ${{ vars.MINIO_PUBLIC_BASE_URL }}
+          MINIO_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY_ID }}
+          MINIO_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_ACCESS_KEY }}
+        run: python .clean/scripts/sync-minio.py --tag "$RELEASE_TAG"

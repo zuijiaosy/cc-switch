@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CC Switch 下载</title>
+<meta name="description" content="CC Switch 的 CodexZH fork 构建：在图形界面中管理和切换 Claude Code、Codex 等 AI 编程工具的供应商配置。支持 Windows、macOS、Linux。">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.png" type="image/png">
+<style>
+:root {
+  --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f1f1ee; --text: #1b1b1a; --muted: #62625e;
+  --border: #e3e3de; --accent: #2f6fed; --accent-text: #ffffff; --accent-soft: #e8efff;
+  --warn-bg: #fff6e5; --warn-border: #f3d79b; --code: #f1f1ee; --radius: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131312; --surface: #1c1c1b; --surface-2: #242423; --text: #ececea; --muted: #a2a29d;
+    --border: #2f2f2d; --accent: #6b9bff; --accent-text: #0d1220; --accent-soft: #1d2740;
+    --warn-bg: #2a2416; --warn-border: #5a4a22; --code: #262624;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code.block { display: block; white-space: nowrap; overflow-x: auto; margin-top: 4px; padding: 4px 8px; word-break: normal; }
+code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code); padding: 1px 5px; border-radius: 5px; word-break: break-all; }
+.wrap { max-width: 920px; margin: 0 auto; padding: 0 16px; }
+header.top { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--text); }
+.brand img { width: 28px; height: 28px; }
+.top nav a { color: var(--muted); margin-left: 18px; font-size: 14px; }
+.hero { text-align: center; padding: 40px 0 28px; }
+.hero img { width: 96px; height: 96px; }
+.hero h1 { font-size: 32px; line-height: 1.25; margin: 14px 0 8px; letter-spacing: -0.01em; }
+.hero p.lead { color: var(--muted); font-size: 17px; margin: 0 auto; max-width: 620px; }
+.cta { margin-top: 26px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--accent); color: var(--accent-text); font-weight: 600; font-size: 16px;
+  padding: 13px 26px; border-radius: 10px; min-width: 260px;
+}
+.btn:hover { text-decoration: none; filter: brightness(1.05); }
+.btn[aria-disabled="true"] { opacity: .55; pointer-events: none; }
+.cta .meta { color: var(--muted); font-size: 13px; }
+.notice {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 18px; margin: 8px 0 28px;
+}
+.notice strong { display: block; margin-bottom: 4px; }
+.notice p { margin: 4px 0; color: var(--muted); }
+h2 { font-size: 20px; margin: 36px 0 14px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.card.recommended { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.card h3 { margin: 0 0 10px; font-size: 16px; display: flex; align-items: center; justify-content: space-between; }
+.tag { font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-soft); padding: 2px 8px; border-radius: 99px; }
+.card ul { list-style: none; margin: 0; padding: 0; }
+.card li { padding: 8px 0; border-top: 1px solid var(--border); }
+.card li:first-child { border-top: 0; padding-top: 0; }
+.card li a { font-weight: 500; }
+.card li .sub { display: block; color: var(--muted); font-size: 12px; }
+.card .group { color: var(--muted); font-size: 12px; font-weight: 600; margin: 12px 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+.card .group:first-of-type { margin-top: 0; }
+.status { color: var(--muted); text-align: center; padding: 20px 0; }
+.status.error { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: var(--radius); color: var(--text); padding: 14px 16px; text-align: left; }
+.help { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.help .card p, .help .card li { color: var(--muted); font-size: 14px; }
+.help .card ol { margin: 0; padding-left: 18px; }
+.help .card li { border: 0; padding: 2px 0; }
+details { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; margin-top: 14px; }
+details summary { cursor: pointer; font-weight: 500; }
+table.sums { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+table.sums td { padding: 6px 4px; border-top: 1px solid var(--border); vertical-align: top; }
+table.sums td:first-child { white-space: nowrap; padding-right: 12px; }
+table.sums code { background: none; padding: 0; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); margin-top: 48px; padding: 22px 0 40px; }
+footer p { margin: 4px 0; }
+@media (max-width: 760px) {
+  .grid, .help { grid-template-columns: 1fr; }
+  .hero h1 { font-size: 26px; }
+  .btn { min-width: 0; width: 100%; }
+  .top nav a { margin-left: 12px; }
+  table.sums td:first-child { white-space: normal; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="./"><img src="favicon.png" alt="" width="28" height="28">CC Switch</a>
+    <nav>
+      <a href="#downloads">全部下载</a>
+      <a href="https://github.com/zuijiaosy/cc-switch">GitHub</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <img src="icon.png" alt="CC Switch 图标" width="96" height="96">
+    <h1>CC Switch</h1>
+    <p class="lead">在一个桌面应用里管理并一键切换 Claude Code、Codex、Gemini CLI、OpenCode、OpenClaw 等 AI 编程工具的供应商配置。</p>
+    <div class="cta">
+      <a class="btn" id="primary" href="#downloads" aria-disabled="true">正在获取最新版本…</a>
+      <span class="meta" id="primary-meta">支持 Windows、macOS 和 Linux</span>
+    </div>
+  </section>
+
+  <div class="notice">
+    <strong>这是 CC Switch 的 fork 构建，不是官方发行版</strong>
+    <p>本站的安装包由 <a href="https://github.com/zuijiaosy/cc-switch">zuijiaosy/cc-switch</a> 自动构建，它 fork 自开源项目 <a href="https://github.com/farion1231/cc-switch">farion1231/cc-switch</a>（MIT 许可证），每次跟随上游的正式版本重新构建。</p>
+    <p>与上游的区别：移除内置的第三方供应商推荐与广告，只预置 CodexZH 与 CcodeZH 两个供应商模板（不含任何 API Key，需要自己填写）；自定义供应商及其余功能与上游一致。</p>
+  </div>
+
+  <section id="downloads">
+    <h2>全部下载 <span id="version" style="color:var(--muted);font-weight:400;font-size:15px"></span></h2>
+    <div id="status" class="status">正在读取下载列表…</div>
+    <div class="grid" id="grid" hidden></div>
+    <details id="checksums" hidden>
+      <summary>SHA-256 校验值</summary>
+      <p style="color:var(--muted);font-size:13px;margin:8px 0 0">与 GitHub Release 中的 <a id="sums-link" href="#">SHA256SUMS.txt</a> 一致，可用于核对下载的文件。</p>
+      <table class="sums"><tbody id="sums"></tbody></table>
+    </details>
+  </section>
+
+  <section>
+    <h2>安装说明</h2>
+    <div class="help">
+      <div class="card">
+        <h3>Windows</h3>
+        <ol>
+          <li>普通电脑选 x64，骁龙等 ARM 设备选 ARM64。</li>
+          <li>MSI 为安装版；Portable 解压即可运行。</li>
+          <li>如出现 SmartScreen 提示，点“更多信息 → 仍要运行”。</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>macOS</h3>
+        <ol>
+          <li>DMG 同时支持 Apple 芯片和 Intel。</li>
+          <li>打开 DMG，把 CC Switch 拖入“应用程序”。</li>
+          <li id="mac-gatekeeper">若提示无法验证开发者，在“系统设置 → 隐私与安全性”中点“仍要打开”。</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>Linux</h3>
+        <ol>
+          <li>AppImage：添加执行权限后直接运行<code class="block">chmod +x CC-Switch-*.AppImage</code></li>
+          <li>Debian / Ubuntu<code class="block">sudo apt install ./CC-Switch-*.deb</code></li>
+          <li>Fedora / RHEL<code class="block">sudo dnf install ./CC-Switch-*.rpm</code></li>
+        </ol>
+      </div>
+    </div>
+    <p style="color:var(--muted);font-size:14px;margin-top:14px">安装后在“添加供应商”里选择 CodexZH 或 CcodeZH，填入你自己的 API Key 即可。配置方法见 <a href="https://docs.codexzh.com/">CodexZH 文档</a>。</p>
+  </section>
+
+  <footer>
+    <p>CC Switch 原项目：<a href="https://github.com/farion1231/cc-switch">farion1231/cc-switch</a>，MIT 许可证，版权归原作者所有。</p>
+    <p>本构建：<a href="https://github.com/zuijiaosy/cc-switch">zuijiaosy/cc-switch</a> · <a href="https://github.com/zuijiaosy/cc-switch/releases">GitHub Releases</a>（备用下载）</p>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var MANIFEST = "https://oss.codexzh.com/downloads/cc-switch/latest.json";
+  var RELEASES = "https://github.com/zuijiaosy/cc-switch/releases/latest";
+  var OS_LABEL = { windows: "Windows", macos: "macOS", linux: "Linux" };
+  var ARCH_LABEL = { x64: "x64", arm64: "ARM64", universal: "Apple 芯片 / Intel" };
+  var KIND_LABEL = { msi: "安装版 MSI", portable: "便携版 ZIP", dmg: "DMG 安装包", zip: "ZIP 压缩包",
+                     appimage: "AppImage", deb: "DEB（Debian / Ubuntu）", rpm: "RPM（Fedora / RHEL）" };
+  var PREFERRED = { windows: "msi", macos: "dmg", linux: "appimage" };
+  var ORDER = ["x64", "universal", "arm64", "msi", "portable", "dmg", "zip", "appimage", "deb", "rpm"];
+  function rank(f) { return ORDER.indexOf(f.arch) * 100 + ORDER.indexOf(f.kind); }
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (key) {
+      if (key === "text") node.textContent = attrs[key]; else node.setAttribute(key, attrs[key]);
+    });
+    (children || []).forEach(function (child) { if (child) node.appendChild(child); });
+    return node;
+  }
+  function size(bytes) { return (bytes / 1048576).toFixed(1) + " MB"; }
+  function date(value) {
+    var d = new Date(value);
+    return isNaN(d) ? "" : d.toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Shanghai" });
+  }
+
+  function detect() {
+    var ua = navigator.userAgent || "";
+    var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+    var os = /Win/i.test(platform) || /Windows/i.test(ua) ? "windows"
+      : /Mac/i.test(platform) || /Macintosh|Mac OS X/i.test(ua) ? "macos"
+      : /Linux|X11/i.test(platform + ua) && !/Android/i.test(ua) ? "linux" : null;
+    var arch = /aarch64|arm64|ARM/i.test(ua) ? "arm64" : "x64";
+    var result = { os: os, arch: os === "macos" ? "universal" : arch };
+    if (os && navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+      return navigator.userAgentData.getHighEntropyValues(["architecture"]).then(function (v) {
+        if (os !== "macos" && v.architecture) result.arch = v.architecture === "arm" ? "arm64" : "x64";
+        return result;
+      }, function () { return result; });
+    }
+    return Promise.resolve(result);
+  }
+
+  function fail() {
+    var status = $("status");
+    status.className = "status error";
+    status.textContent = "";
+    status.appendChild(document.createTextNode("暂时无法读取下载列表，请稍后刷新，或前往 "));
+    status.appendChild(el("a", { href: RELEASES, text: "GitHub Releases" }));
+    status.appendChild(document.createTextNode(" 下载。"));
+    var primary = $("primary");
+    primary.textContent = "前往 GitHub 下载";
+    primary.href = RELEASES;
+    primary.removeAttribute("aria-disabled");
+  }
+
+  function render(manifest, client) {
+    var files = (manifest.files || []).filter(function (f) { return /^https:\/\//.test(f.url); })
+      .sort(function (a, b) { return rank(a) - rank(b); });
+    if (!files.length) throw new Error("empty manifest");
+    $("version").textContent = "v" + manifest.version + " · r" + manifest.revision +
+      (manifest.published_at ? " · " + date(manifest.published_at) : "");
+
+    var primary = client.os && files.filter(function (f) {
+      return f.os === client.os && f.arch === client.arch && f.kind === PREFERRED[client.os];
+    })[0];
+    var button = $("primary");
+    if (primary) {
+      button.textContent = "下载 " + OS_LABEL[primary.os] + " 版" + (primary.os === "macos" ? "" : "（" + ARCH_LABEL[primary.arch] + "）");
+      button.href = primary.url;
+      $("primary-meta").textContent = "v" + manifest.version + " · " + KIND_LABEL[primary.kind] + " · " + size(primary.size) + " · 其他系统见下方";
+    } else {
+      button.textContent = "选择你的系统下载";
+      button.href = "#downloads";
+    }
+    button.removeAttribute("aria-disabled");
+
+    var grid = $("grid");
+    ["windows", "macos", "linux"].forEach(function (os) {
+      var ofOs = files.filter(function (f) { return f.os === os; });
+      if (!ofOs.length) return;
+      var card = el("div", { "class": "card" + (client.os === os ? " recommended" : "") }, [
+        el("h3", {}, [el("span", { text: OS_LABEL[os] }), client.os === os ? el("span", { "class": "tag", text: "你的系统" }) : null])
+      ]);
+      var archs = [];
+      ofOs.forEach(function (f) { if (archs.indexOf(f.arch) < 0) archs.push(f.arch); });
+      archs.forEach(function (arch) {
+        card.appendChild(el("div", { "class": "group", text: ARCH_LABEL[arch] || arch }));
+        card.appendChild(el("ul", {}, ofOs.filter(function (f) { return f.arch === arch; }).map(function (f) {
+          return el("li", {}, [
+            el("a", { href: f.url, text: KIND_LABEL[f.kind] || f.kind }),
+            el("span", { "class": "sub", text: f.name + " · " + size(f.size) })
+          ]);
+        })));
+      });
+      grid.appendChild(card);
+    });
+
+    var source = files.filter(function (f) { return f.kind === "source"; })[0];
+    var sums = $("sums");
+    files.forEach(function (f) {
+      sums.appendChild(el("tr", {}, [el("td", { text: f.name }), el("td", {}, [el("code", { text: f.sha256 })])]));
+    });
+    if (manifest.checksums_url) $("sums-link").href = manifest.checksums_url;
+    if (source) {
+      sums.parentNode.parentNode.appendChild(el("p", { style: "font-size:13px;color:var(--muted);margin:10px 0 0" }, [
+        document.createTextNode("对应的完整应用源码："), el("a", { href: source.url, text: source.name })
+      ]));
+    }
+    if (manifest.macos_notarized) {
+      $("mac-gatekeeper").textContent = "安装包已通过 Apple 公证，可直接打开。";
+    }
+    $("status").hidden = true;
+    grid.hidden = false;
+    $("checksums").hidden = false;
+  }
+
+  var controller = window.AbortController ? new AbortController() : null;
+  var timer = setTimeout(function () { if (controller) controller.abort(); }, 10000);
+  Promise.all([
+    fetch(MANIFEST, { cache: "no-cache", signal: controller && controller.signal }).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }),
+    detect()
+  ]).then(function (values) {
+    clearTimeout(timer);
+    if (!values[0] || values[0].schema !== 1) throw new Error("unsupported manifest");
+    render(values[0], values[1]);
+  }).catch(function () { clearTimeout(timer); fail(); });
+})();
+</script>
+</body>
+</html>

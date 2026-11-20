@@ -164,6 +164,36 @@ Windows / Linux 选择与系统及 CPU 架构对应的安装包即可；`.sig`�
 
 所有平台的产物清单必须引用同一个源码快照 SHA。已发布的 Release 不被覆盖；同一标签的草稿只在来源提交一致时续传。这是个人维护的衍生构建；原项目 MIT 许可证和版权声明保留。
 
+## MinIO 直连下载与下载站
+
+除 GitHub Release 外，每次发布后由 [`mirror-minio.yml`](../.github/workflows/mirror-minio.yml) 把安装包镜像到 fiber 上的 MinIO（`oss.codexzh.com`），供下载站 [ccswitch.codexzh.com](https://ccswitch.codexzh.com) 直链下载。它与客户端自动更新无关：应用内更新源仍按上文配置，镜像失败不影响 GitHub Release。
+
+| 对象 | 地址 | 缓存 |
+| --- | --- | --- |
+| 下载清单 | `https://oss.codexzh.com/downloads/cc-switch/latest.json` | `no-cache` |
+| 固定版本文件 | `https://oss.codexzh.com/downloads/cc-switch/releases/<完整发行标签>/<文件名>` | 一年，immutable |
+| 该版本清单 | `.../releases/<完整发行标签>/downloads.json` | 一年，immutable |
+
+流程（`.clean/scripts/sync-minio.py`）：读取已发布的 Release → 按 `SHA256SUMS.txt` 校验每个文件，签名版另用 `TAURI_PUBLIC_KEY` 验证 `SHA256SUMS.txt.sig` → 上传 Windows/macOS/Linux 安装包、完整源码、校验与构建信息（不上传仅供自动更新使用的 `.sig`、`latest.json` 和 macOS 更新包）→ 从公网 HTTPS 重新下载核对大小与 SHA-256，并检查 Range → 最后更新 `latest.json`。已存在但内容不同的对象拒绝覆盖；较旧的版本不会把 `latest.json` 退回；已镜像的版本再次运行时直接跳过。大于 32 MB 的文件按 32 MB 分片上传，以避开 Cloudflare 对单个请求体 100 MB 的限制。
+
+**触发方式：** `Clean upstream release` 每次运行的最后都会调用它（包括尚未完成签名初始化、只做定时检查的运行，此时镜像当前最新 Release）；也可在 Actions 中手动运行 **Mirror release to MinIO**，可选填 `tag` 重试或补传某个版本。未配置下列变量时任务自动跳过。
+
+| 类型 | 名称 | 内容 |
+| --- | --- | --- |
+| Variable | `MINIO_ENDPOINT` | `https://oss.codexzh.com`（S3 API 地址，不带路径） |
+| Variable | `MINIO_BUCKET` | `downloads` |
+| Variable，可选 | `MINIO_PREFIX` | 默认 `cc-switch` |
+| Variable，可选 | `MINIO_PUBLIC_BASE_URL` | 公开下载根地址，默认 `<MINIO_ENDPOINT>/<MINIO_BUCKET>` |
+| Secret | `MINIO_ACCESS_KEY_ID`、`MINIO_SECRET_ACCESS_KEY` | 仅能写 `downloads/cc-switch/*` 的专用 MinIO 账号，不能删除对象，不要使用 MinIO root 凭据 |
+
+MinIO 侧需要：桶 `downloads`；匿名只读策略仅覆盖 `downloads/cc-switch/*` 的 `s3:GetObject`（不开放列目录）；上述专用账号。
+
+**下载站**：源码在 [`.clean/site/`](site/)，纯静态页面，部署在 Cloudflare Pages 项目 `ccswitch`，绑定域名 `ccswitch.codexzh.com`。页面在浏览器中读取上面的 `latest.json`，按访客系统推荐安装包，列出全部平台的直链和 SHA-256；读取失败时引导到 GitHub Releases。发版不需要重新部署页面，只有修改页面本身时才需要重新发布：
+
+```bash
+npx wrangler@4 pages deploy .clean/site --project-name ccswitch --branch main
+```
+
 ## 维护与故障处理
 
 - **Actions 没有开始：** 检查工作流是否启用、账户 Actions 状态和仓库策略；定时工作流只从默认分支运行。检查月度状态记录是否持续更新。

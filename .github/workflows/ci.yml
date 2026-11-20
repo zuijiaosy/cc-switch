@@ -7,12 +7,14 @@ on:
       - '.clean/**'
       - '.github/workflows/clean-release.yml'
       - '.github/workflows/recover-clean-release.yml'
+      - '.github/workflows/mirror-minio.yml'
   push:
     branches: [main]
     paths-ignore:
       - '.clean/**'
       - '.github/workflows/clean-release.yml'
       - '.github/workflows/recover-clean-release.yml'
+      - '.github/workflows/mirror-minio.yml'
 
 concurrency:
   group: ci-${{ github.ref }}
