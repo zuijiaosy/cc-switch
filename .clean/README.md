@@ -173,8 +173,9 @@ Windows / Linux 选择与系统及 CPU 架构对应的安装包即可；`.sig`�
 | 下载清单 | `https://oss.codexzh.com/downloads/cc-switch/latest.json` | `no-cache` |
 | 固定版本文件 | `https://oss.codexzh.com/downloads/cc-switch/releases/<完整发行标签>/<文件名>` | 一年，immutable |
 | 该版本清单 | `.../releases/<完整发行标签>/downloads.json` | 一年，immutable |
+| 上游许可证 | `.../releases/<完整发行标签>/LICENSE.txt` | 一年，immutable |
 
-流程（`.clean/scripts/sync-minio.py`）：读取已发布的 Release → 按 `SHA256SUMS.txt` 校验每个文件，签名版另用 `TAURI_PUBLIC_KEY` 验证 `SHA256SUMS.txt.sig` → 上传 Windows/macOS/Linux 安装包、完整源码、校验与构建信息（不上传仅供自动更新使用的 `.sig`、`latest.json` 和 macOS 更新包）→ 从公网 HTTPS 重新下载核对大小与 SHA-256，并检查 Range → 最后更新 `latest.json`。已存在但内容不同的对象拒绝覆盖；较旧的版本不会把 `latest.json` 退回；已镜像的版本再次运行时直接跳过。大于 32 MB 的文件按 32 MB 分片上传，以避开 Cloudflare 对单个请求体 100 MB 的限制。
+流程（`.clean/scripts/sync-minio.py`）：读取已发布的 Release → 按 `SHA256SUMS.txt` 校验每个文件，签名版另用 `TAURI_PUBLIC_KEY` 验证 `SHA256SUMS.txt.sig` → 上传 Windows/macOS/Linux 安装包、完整源码、校验与构建信息（不上传仅供自动更新使用的 `.sig`、`latest.json` 和 macOS 更新包）→ 从公网 HTTPS 重新下载核对大小与 SHA-256，并检查 Range → 最后更新 `latest.json`。每个版本另从已校验的源码包中取出上游 `LICENSE`（MIT 版权与许可声明），作为 `LICENSE.txt` 与安装包放在同一目录，清单中的 `license_url` 指向它；下载站各处的“MIT 许可证”链接使用该地址，读取失败时使用站点自带的 `LICENSE.txt`。已存在但内容不同的对象拒绝覆盖；较旧的版本不会把 `latest.json` 退回；已镜像的版本再次运行时直接跳过。大于 32 MB 的文件按 32 MB 分片上传，以避开 Cloudflare 对单个请求体 100 MB 的限制。
 
 **触发方式：** `Clean upstream release` 每次运行的最后都会调用它（包括尚未完成签名初始化、只做定时检查的运行，此时镜像当前最新 Release）；也可在 Actions 中手动运行 **Mirror release to MinIO**，可选填 `tag` 重试或补传某个版本。未配置下列变量时任务自动跳过。
 
