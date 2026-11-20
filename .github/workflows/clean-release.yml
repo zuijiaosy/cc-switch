@@ -28,6 +28,7 @@ jobs:
       state: ${{ steps.detect.outputs.state }}
       release_tag: ${{ steps.detect.outputs.release_tag }}
       signed_updates: ${{ steps.detect.outputs.signed_updates }}
+      download_enabled: ${{ steps.detect.outputs.download_enabled }}
     env:
       CLEAN_REPOSITORY: ${{ github.repository }}
     steps:
@@ -35,10 +36,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - name: Install release test signature verifier
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
       - name: Validate release automation
         run: |
           python -m unittest discover -s .clean/tests -v
-          node --test .clean/tests/setup-updates.test.mjs
+          node --test .clean/tests/*.test.mjs
       - name: Check setup and resolve official stable release
         id: detect
         env:
@@ -46,6 +51,12 @@ jobs:
           TAURI_PUBLIC_KEY: ${{ vars.TAURI_PUBLIC_KEY }}
           CLEAN_UPDATE_ENDPOINT: ${{ vars.CLEAN_UPDATE_ENDPOINT }}
           HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          DOWNLOAD_BASE_URL: ${{ vars.DOWNLOAD_BASE_URL }}
+          DOWNLOAD_SSH_HOST: ${{ vars.DOWNLOAD_SSH_HOST }}
+          DOWNLOAD_SSH_PORT: ${{ vars.DOWNLOAD_SSH_PORT }}
+          DOWNLOAD_SSH_USER: ${{ vars.DOWNLOAD_SSH_USER }}
+          HAS_DOWNLOAD_SSH_KEY: ${{ secrets.DOWNLOAD_SSH_PRIVATE_KEY != '' }}
+          HAS_DOWNLOAD_KNOWN_HOSTS: ${{ secrets.DOWNLOAD_SSH_KNOWN_HOSTS != '' }}
         run: python .clean/scripts/release.py detect
       - name: Checkout exact official release commit
         if: steps.detect.outputs.build == 'true'
@@ -308,6 +319,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
       - uses: actions/download-artifact@v8
         with:
           name: clean-source
@@ -325,7 +339,45 @@ jobs:
       - name: Verify all assets and publish atomically from a draft
         env:
           GH_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: python .clean/scripts/release.py publish
+
+  downloads:
+    name: Publish and verify hz download channel
+    needs: [prepare, publish]
+    if: >-
+      always() && !cancelled() && needs.prepare.result == 'success' &&
+      needs.prepare.outputs.download_enabled == 'true' &&
+      (needs.prepare.outputs.state == 'up_to_date' ||
+      (needs.prepare.outputs.build == 'true' && needs.publish.result == 'success'))
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install upload and signature verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openssh-client minisign
+      - name: Sync a complete signed release and verify HTTPS downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          TAURI_PUBLIC_KEY: ${{ vars.TAURI_PUBLIC_KEY }}
+          DOWNLOAD_BASE_URL: ${{ vars.DOWNLOAD_BASE_URL }}
+          DOWNLOAD_SSH_HOST: ${{ vars.DOWNLOAD_SSH_HOST }}
+          DOWNLOAD_SSH_PORT: ${{ vars.DOWNLOAD_SSH_PORT }}
+          DOWNLOAD_SSH_USER: ${{ vars.DOWNLOAD_SSH_USER }}
+          DOWNLOAD_SSH_PRIVATE_KEY: ${{ secrets.DOWNLOAD_SSH_PRIVATE_KEY }}
+          DOWNLOAD_SSH_KNOWN_HOSTS: ${{ secrets.DOWNLOAD_SSH_KNOWN_HOSTS }}
+        run: python .clean/scripts/sync-downloads.py --tag "$RELEASE_TAG"
 
   maintain-schedule:
     name: Record monthly upstream check

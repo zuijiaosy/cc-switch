@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** One-time setup on the repository owner's already-authenticated computer. */
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,42 @@ import { setTimeout as delay } from 'node:timers/promises';
 const REPOSITORY = 'zuijiaosy/cc-switch';
 const ENDPOINT = `https://github.com/${REPOSITORY}/releases/latest/download/latest.json`;
 const CLI_VERSION = '2.12.4';
+
+export function normalizeDownloadBaseUrl(value) {
+  let url;
+  try { url = new URL(value); } catch { throw new Error('下载地址必须为 https://下载域名/cc-switch。'); }
+  const labels = url.hostname.split('.');
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.port ||
+      url.pathname.replace(/\/$/, '') !== '/cc-switch' || labels.length < 2 ||
+      labels.some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label)) ||
+      /^\d+(?:\.\d+){3}$/.test(url.hostname) || /(?:^|\.)(?:localhost|local)$/i.test(url.hostname)) {
+    throw new Error('下载地址必须为 https://下载域名/cc-switch，不允许 IP、账号、查询参数或自定义端口。');
+  }
+  return `${url.origin}/cc-switch`;
+}
+
+export function setupMode(args) {
+  if (!args.length) return 'activate';
+  if (args.length === 1 && args[0] === '--prepare-only') return 'prepare';
+  throw new Error('用法：node .clean/scripts/setup-updates.mjs [--prepare-only]');
+}
+
+export async function verifyDownloadChannel(base, publicKey) {
+  const response = await fetch(`${base}/channel.json`, {
+    redirect: 'error', headers: { 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error('下载站 channel.json 尚不可公开读取，请先完成服务器部署。');
+  const raw = await response.text();
+  if (Buffer.byteLength(raw) > 64 * 1024) throw new Error('下载站 channel.json 超过大小限制。');
+  const channel = JSON.parse(raw);
+  if (channel.schema !== 1 || channel.application !== 'cc-switch' || channel.repository !== REPOSITORY ||
+      channel.base_url !== base || keyMaterial(channel.updater_public_key || '') !== keyMaterial(publicKey) ||
+      !Number.isSafeInteger(channel.max_batch_bytes) || channel.max_batch_bytes <= 0 ||
+      !Number.isSafeInteger(channel.min_free_bytes) || channel.min_free_bytes <= 0) {
+    throw new Error('下载站身份、公钥或容量配置与此仓库不一致，不能启用。');
+  }
+  return channel;
+}
 
 export function keyMaterial(value) {
   const trimmed = value.trim();
@@ -108,7 +144,8 @@ async function waitForPublicDownloads(previous) {
   throw new Error('仓库设置已提交，但公开下载尚未确认。请稍后重新运行本脚本；它会复用已有密钥。');
 }
 
-export async function main() {
+export async function main(args = process.argv.slice(2)) {
+  const mode = setupMode(args);
   if (Number(process.versions.node.split('.')[0]) < 20) throw new Error('需要 Node.js 20 或更新版本。');
   process.umask(0o077);
   command('gh', ['auth', 'status', '--hostname', 'github.com']);
@@ -119,6 +156,7 @@ export async function main() {
   const publicVariable = github(`repos/${REPOSITORY}/actions/variables/TAURI_PUBLIC_KEY`, { allowNotFound: true });
   const privateSecret = github(`repos/${REPOSITORY}/actions/secrets/TAURI_SIGNING_PRIVATE_KEY`, { allowNotFound: true });
   const passwordSecret = github(`repos/${REPOSITORY}/actions/secrets/TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, { allowNotFound: true });
+  const downloadVariable = github(`repos/${REPOSITORY}/actions/variables/DOWNLOAD_BASE_URL`, { allowNotFound: true });
   const previous = github(`repos/${REPOSITORY}/releases/latest`, { allowNotFound: true });
   const keyDirectory = join(homedir(), '.config', 'cc-switch-clean', 'zuijiaosy-cc-switch');
   const privatePath = join(keyDirectory, 'signing.key');
@@ -128,11 +166,11 @@ export async function main() {
     remotePublic: publicVariable?.value || '', remotePrivate: Boolean(privateSecret),
     remotePassword: Boolean(passwordSecret), localPublic, localPrivate: existsSync(privatePath),
   });
+  mkdirSync(keyDirectory, { recursive: true, mode: 0o700 });
+  chmodSync(keyDirectory, 0o700);
   if (plan === 'keep-remote') {
     console.log('保留仓库现有签名配置，不生成或替换密钥。');
   } else {
-    mkdirSync(keyDirectory, { recursive: true, mode: 0o700 });
-    chmodSync(keyDirectory, 0o700);
     if (plan === 'generate') {
       console.log(`使用官方 Tauri CLI ${CLI_VERSION} 生成本机签名备份…`);
       command(process.platform === 'win32' ? 'npx.cmd' : 'npx', [
@@ -143,17 +181,32 @@ export async function main() {
     if (!existsSync(privatePath) || !existsSync(publicPath)) throw new Error('签名文件生成不完整，请检查本机备份目录。');
     chmodSync(privatePath, 0o600);
     chmodSync(publicPath, 0o600);
-    const publicKey = readFileSync(publicPath, 'utf8').trim();
-    keyMaterial(publicKey);
-    // Write the public key first. A retry can compare it with the local backup
-    // before setting the missing private key; no existing secret is replaced.
-    command('gh', ['variable', 'set', 'TAURI_PUBLIC_KEY', '--repo', REPOSITORY], { input: publicKey });
-    command('gh', ['secret', 'set', 'TAURI_SIGNING_PRIVATE_KEY', '--repo', REPOSITORY], {
-      input: readFileSync(privatePath),
-    });
     console.log(`签名备份保存在 ${keyDirectory}，请保留该目录；私钥未输出到终端或写入 Git。`);
   }
-  command('gh', ['variable', 'set', 'CLEAN_UPDATE_ENDPOINT', '--repo', REPOSITORY], { input: ENDPOINT });
+  const publicKey = plan === 'keep-remote' ? publicVariable.value.trim() : readFileSync(publicPath, 'utf8').trim();
+  keyMaterial(publicKey);
+  const exportedPublic = join(keyDirectory, 'download-channel-public.key');
+  writeFileSync(exportedPublic, publicKey + '\n', { mode: 0o600 });
+  chmodSync(exportedPublic, 0o600);
+  if (mode === 'prepare') {
+    console.log(`签名公钥已准备：${exportedPublic}`);
+    console.log('本次未写 GitHub 配置、未公开仓库、未触发构建。把这份公钥交给 hz 发布程序，完成下载站配置后再运行不带 --prepare-only 的命令。');
+    return;
+  }
+  const downloadBase = downloadVariable?.value ? normalizeDownloadBaseUrl(downloadVariable.value) : '';
+  if (downloadBase) {
+    for (const name of ['DOWNLOAD_SSH_HOST', 'DOWNLOAD_SSH_USER']) {
+      if (!github(`repos/${REPOSITORY}/actions/variables/${name}`, { allowNotFound: true })?.value) {
+        throw new Error(`缺少 ${name}；先运行 setup-downloads.mjs 配置下载通道。`);
+      }
+    }
+    for (const name of ['DOWNLOAD_SSH_PRIVATE_KEY', 'DOWNLOAD_SSH_KNOWN_HOSTS']) {
+      if (!github(`repos/${REPOSITORY}/actions/secrets/${name}`, { allowNotFound: true })) {
+        throw new Error(`缺少 ${name}；先运行 setup-downloads.mjs 配置下载通道。`);
+      }
+    }
+    await verifyDownloadChannel(downloadBase, publicKey);
+  }
   if (repository.private) {
     console.log(`按仓库所有者要求，将 ${REPOSITORY} 的代码、历史和 Releases 设置为公开。`);
     command('gh', ['api', '--method', 'PATCH', `repos/${REPOSITORY}`, '--input', '-'], {
@@ -161,10 +214,21 @@ export async function main() {
     });
   }
   await waitForPublicDownloads(previous);
+  // Public reachability and the optional server channel are verified before
+  // completing the key pair that enables scheduled builds.
+  if (plan !== 'keep-remote') {
+    command('gh', ['variable', 'set', 'TAURI_PUBLIC_KEY', '--repo', REPOSITORY], { input: publicKey });
+    command('gh', ['secret', 'set', 'TAURI_SIGNING_PRIVATE_KEY', '--repo', REPOSITORY], {
+      input: readFileSync(privatePath),
+    });
+  }
+  command('gh', ['variable', 'set', 'CLEAN_UPDATE_ENDPOINT', '--repo', REPOSITORY], {
+    input: downloadBase ? `${downloadBase}/stable/latest.json` : ENDPOINT,
+  });
   command('gh', ['workflow', 'enable', 'clean-release.yml', '--repo', REPOSITORY]);
   command('gh', ['workflow', 'run', 'clean-release.yml', '--repo', REPOSITORY, '--ref', 'main']);
   console.log(`设置完成，已触发签名版本构建：https://github.com/${REPOSITORY}/actions/workflows/clean-release.yml`);
-  console.log('构建发布完成后首次手动安装 r2；以后的更高官方版本通过客户端自己的更新入口安装。');
+  console.log('构建和下载通道验证完成后，首次手动安装新的签名版本；以后的更高官方版本通过客户端自己的更新入口安装。');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -1,6 +1,6 @@
 {
   "upstream_repository": "farion1231/cc-switch",
-  "release_revision": 2,
+  "release_revision": 3,
   "require_signed_updates": true,
   "test_paths": [
     "tests/components/CleanProviders.test.tsx",

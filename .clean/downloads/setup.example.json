@@ -1,0 +1,9 @@
+{
+  "base_url": "https://dl.example.com/cc-switch",
+  "ssh_host": "hz.example.com",
+  "ssh_port": 22,
+  "ssh_user": "cc-switch-upload",
+  "ssh_key_file": "~/.ssh/cc-switch-download-upload",
+  "known_hosts_file": "~/.ssh/cc-switch-download-known-hosts",
+  "public_key_file": "~/.config/cc-switch-clean/zuijiaosy-cc-switch/download-channel-public.key"
+}

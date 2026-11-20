@@ -11,6 +11,7 @@ import argparse
 import base64
 import datetime as dt
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,7 @@ STATE = Path(".clean-state")
 API = "https://api.github.com"
 PLATFORMS = ("macos", "windows-x64", "windows-arm64", "linux-x64", "linux-arm64")
 PUBLIC_CHECK_DELAYS = (0, 3, 8, 15, 30, 45)
+TAURI_SIGNER_PACKAGE = "@tauri-apps/cli@2.12.4"
 
 
 def fail(message: str) -> None:
@@ -197,17 +199,107 @@ def stable_version(value: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in value.split("."))
 
 
-def public_json(url: str) -> object:
+def public_json(url: str, *, same_origin: bool = False) -> object:
     if not url.startswith("https://"):
         raise RuntimeError("Public update resources must use HTTPS")
     request = urllib.request.Request(url, headers={"User-Agent": "cc-switch-clean-release", "Cache-Control": "no-cache"})
     with urllib.request.urlopen(request, timeout=30) as response:
         if not response.geturl().startswith("https://"):
             raise RuntimeError("Public resource redirected to non-HTTPS transport")
+        if same_origin:
+            requested = urllib.parse.urlsplit(url)
+            received = urllib.parse.urlsplit(response.geturl())
+            if (received.hostname, received.port or 443) != (requested.hostname, requested.port or 443):
+                raise RuntimeError("Download channel redirected outside its configured HTTPS origin")
         raw = response.read(4 * 1024 * 1024 + 1)
         if len(raw) > 4 * 1024 * 1024:
             raise RuntimeError("Public update JSON exceeded the expected size limit")
         return json.loads(raw)
+
+
+def normalize_download_base(value: str) -> str:
+    """Canonical public download origin; the server protocol fixes /cc-switch."""
+    if not isinstance(value, str):
+        fail("DOWNLOAD_BASE_URL must be an HTTPS URL")
+    value = value.strip()
+    if not value:
+        return ""
+    value = value.rstrip("/")
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:
+        fail("DOWNLOAD_BASE_URL is not a valid HTTPS URL")
+    if (parsed.scheme != "https" or not host or parsed.username is not None
+            or parsed.password is not None or port not in (None, 443)
+            or parsed.path != "/cc-switch" or "?" in value or "#" in value
+            or any(character.isspace() or ord(character) < 32 for character in value)):
+        fail("DOWNLOAD_BASE_URL must be https://<public-domain>/cc-switch without credentials, query, fragment, or a non-443 port")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        fail("DOWNLOAD_BASE_URL must use a public DNS name, not an IP address")
+    host = host.lower()
+    labels = host.split(".")
+    if (host == "localhost" or host.endswith((".localhost", ".local")) or len(labels) < 2
+            or len(host) > 253 or labels[-1].isdigit()
+            or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels)):
+        fail("DOWNLOAD_BASE_URL must use a public DNS name, not localhost or an invalid hostname")
+    return f"https://{host}/cc-switch"
+
+
+def github_update_endpoint(repository: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or repository.lower() == "farion1231/cc-switch":
+        fail("The updater repository must be the downstream owner/name repository")
+    return f"https://github.com/{repository}/releases/latest/download/latest.json"
+
+
+def expected_updater_endpoints(data: dict) -> list[str]:
+    """Validate recorded endpoints, including legacy provenance with one string."""
+    if not data["signed_updates"]:
+        if data.get("updater_endpoint") or data.get("updater_endpoints") or data.get("download_base_url"):
+            fail("Unsigned builds cannot configure update or download endpoints")
+        return []
+    github = github_update_endpoint(data["repository"])
+    base = normalize_download_base(data.get("download_base_url", ""))
+    expected = [f"{base}/stable/latest.json", github] if base else [github]
+    if data.get("updater_endpoint") != expected[0] or data.get("updater_endpoints", expected) != expected:
+        fail("Updater endpoints do not match the configured download channel and this repository's GitHub fallback")
+    return expected
+
+
+def check_download_readiness(repository: str, public_key: str, base: str) -> None:
+    """Validate public server identity without exposing SSH credentials to builds."""
+    host = os.environ.get("DOWNLOAD_SSH_HOST", "").strip()
+    port = os.environ.get("DOWNLOAD_SSH_PORT", "").strip() or "22"
+    user = os.environ.get("DOWNLOAD_SSH_USER", "").strip()
+    if (not host or len(host) > 253
+            or not all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) for label in host.split("."))):
+        fail("DOWNLOAD_SSH_HOST must be a simple DNS name or IPv4 address")
+    if not re.fullmatch(r"[1-9]\d{0,4}", port) or not 1 <= int(port) <= 65535:
+        fail("DOWNLOAD_SSH_PORT must be between 1 and 65535")
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user):
+        fail("DOWNLOAD_SSH_USER must be the dedicated SFTP account")
+    if (os.environ.get("HAS_DOWNLOAD_SSH_KEY", "false").lower() != "true"
+            or os.environ.get("HAS_DOWNLOAD_KNOWN_HOSTS", "false").lower() != "true"):
+        fail("Download setup is incomplete: configure DOWNLOAD_SSH_PRIVATE_KEY and pinned DOWNLOAD_SSH_KNOWN_HOSTS before building")
+    try:
+        channel = public_json(f"{base}/channel.json", same_origin=True)
+    except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError) as error:
+        fail(f"Download channel preflight failed: {error}")
+    if not isinstance(channel, dict) or type(channel.get("schema")) is not int or channel["schema"] != 1 or channel.get("application") != "cc-switch":
+        fail("Download channel.json has an unsupported schema or application")
+    if channel.get("repository") != repository or channel.get("base_url") != base:
+        fail("Download channel.json repository or base URL does not match this distribution")
+    channel_key = channel.get("updater_public_key")
+    if not isinstance(channel_key, str) or public_key_material(channel_key) != public_key_material(public_key):
+        fail("Download channel.json uses a different updater public key")
+    for name, minimum in (("max_batch_bytes", 1), ("min_free_bytes", 1)):
+        if type(channel.get(name)) is not int or channel[name] < minimum:
+            fail(f"Download channel.json has an invalid {name}")
+    print(f"Verified download server identity and configured capacity limits: {base}/channel.json")
 
 
 def public_asset_size(url: str) -> int | None:
@@ -243,6 +335,9 @@ def check_release_continuity(data: dict) -> None:
             fail("Refusing to replace a signed update feed with an unsigned release")
         if public_key_material(provenance["updater_public_key"]) != public_key_material(data["updater_public_key"]):
             fail("Updater public key differs from the previous signed release; existing clients cannot trust it. Keep the original signing key.")
+        previous_base = normalize_download_base(provenance.get("download_base_url", ""))
+        if previous_base and normalize_download_base(data.get("download_base_url", "")) != previous_base:
+            fail("The previously published primary download domain cannot be removed or changed silently. Existing clients may keep receiving an old valid feed there; a separate channel migration is required.")
 
 
 def resolve_commit(repository: str, tag: str) -> str:
@@ -280,25 +375,33 @@ def detect() -> None:
             report_setup_required(repository)
             return
         fail("This distribution requires signed automatic updates. Complete .clean/scripts/setup-updates.mjs once on the owner's authenticated computer to configure TAURI_PUBLIC_KEY and TAURI_SIGNING_PRIVATE_KEY; unsigned fallback is forbidden.")
+    download_base = normalize_download_base(os.environ.get("DOWNLOAD_BASE_URL", ""))
     release = api(f"/repos/{upstream}/releases/latest")
     tag = release["tag_name"]
     if release["draft"] or release["prerelease"] or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
         fail("Only an official stable vMAJOR.MINOR.PATCH release may be built")
     clean_tag = f"clean-{tag}-r{revision}"
     existing = find_release(repository, clean_tag)
-    signed = bool(public_key or endpoint or has_key)
+    signed = bool(public_key or endpoint or has_key or download_base)
     if signed and not (public_key and has_key):
         fail("Partial updater configuration: set TAURI_PUBLIC_KEY variable and TAURI_SIGNING_PRIVATE_KEY secret together")
-    expected_endpoint = f"https://github.com/{repository}/releases/latest/download/latest.json"
+    expected_endpoint = github_update_endpoint(repository)
+    endpoints = []
     if signed:
         public_key = normalize_public_key(public_key)
-        endpoint = endpoint or expected_endpoint
-        if endpoint != expected_endpoint:
-            fail("This workflow publishes to its own GitHub releases; an external feed requires a separately configured publisher")
+        primary = f"{download_base}/stable/latest.json" if download_base else expected_endpoint
+        # setup-updates.mjs may have already recorded the original GitHub feed.
+        # A configured mirror takes priority without requiring that variable's removal.
+        if endpoint and endpoint not in (expected_endpoint, primary):
+            fail("CLEAN_UPDATE_ENDPOINT conflicts with DOWNLOAD_BASE_URL or this repository's GitHub release feed")
+        endpoint = primary
+        endpoints = [primary, expected_endpoint] if download_base else [expected_endpoint]
+        if download_base:
+            check_download_readiness(repository, public_key, download_base)
         public_repo = api(f"/repos/{repository}", anonymous=True, allow_404=True)
         if not public_repo or public_repo.get("private", True):
             fail("Signed native updates require publicly readable release assets. Complete the authorized one-time setup before building; this release will not fall back to manual-only or official updates.")
-        print("Signed updater mode: own public GitHub release feed and own signing key")
+        print("Signed updater mode: own download domain with same-repository GitHub fallback" if download_base else "Signed updater mode: own public GitHub release feed and own signing key")
     else:
         endpoint = ""
         print("::warning::Manual-download mode: no updater signing key/feed configured; native updater has no endpoints and cannot install the official build.")
@@ -315,16 +418,21 @@ def detect() -> None:
         "automation_sha": os.environ["GITHUB_SHA"],
         "signed_updates": signed,
         "updater_endpoint": endpoint,
+        "updater_endpoints": endpoints,
         "updater_public_key": public_key,
+        "download_base_url": download_base,
     }
     if signed:
         check_release_continuity(data)
     if existing and not existing["draft"]:
         if signed:
             verify_public_release(data)
-        print(f"Already published: {clean_tag}; update feed checked. Increment release_revision for a new clean-only build.")
+        print(f"Already published: {clean_tag}; GitHub feed checked. Any configured download mirror is verified in its separate job. Increment release_revision for a new clean-only build.")
         output("build", "false")
         output("state", "up_to_date")
+        output("release_tag", clean_tag)
+        output("signed_updates", str(signed).lower())
+        output("download_enabled", str(bool(download_base)).lower())
         return
     commit = resolve_commit(upstream, tag)
     data["upstream_sha"] = commit
@@ -335,6 +443,7 @@ def detect() -> None:
     output("upstream_tag", tag)
     output("release_tag", clean_tag)
     output("signed_updates", str(signed).lower())
+    output("download_enabled", str(bool(download_base)).lower())
 
 
 def configure(source: Path) -> None:
@@ -345,7 +454,7 @@ def configure(source: Path) -> None:
     if package["version"] != data["version"] or tauri["version"] != data["version"]:
         fail("Upstream release tag and application versions disagree")
     updater = tauri["plugins"]["updater"]
-    updater["endpoints"] = [data["updater_endpoint"]] if data["signed_updates"] else []
+    updater["endpoints"] = expected_updater_endpoints(data)
     if data["signed_updates"]:
         updater["pubkey"] = data["updater_public_key"]
     tauri["bundle"]["createUpdaterArtifacts"] = data["signed_updates"]
@@ -504,7 +613,7 @@ def make_manifest(data: dict, directory: Path) -> dict:
 
 
 def verify_public_release(data: dict, directory: Path | None = None) -> None:
-    """Check the actual anonymous client feed and its assets after CDN propagation.
+    """Check the GitHub feed and assets; the mirror job checks the custom domain.
 
     A post-publication failure is explicit, but does not delete or rewrite a
     published release. Later scheduled checks retry this health check without
@@ -512,10 +621,9 @@ def verify_public_release(data: dict, directory: Path | None = None) -> None:
     """
     if not data["signed_updates"]:
         return
+    expected_updater_endpoints(data)
     base = f"https://github.com/{data['repository']}/releases/download/{data['release_tag']}"
-    endpoint = f"https://github.com/{data['repository']}/releases/latest/download/latest.json"
-    if data["updater_endpoint"] != endpoint:
-        fail("Updater endpoint must remain this repository's public release feed")
+    endpoint = github_update_endpoint(data["repository"])
     expected_files = updater_files(data)
     local = json.loads((directory / "latest.json").read_text(encoding="utf-8")) if directory else None
     last_error = "not checked"
@@ -540,12 +648,12 @@ def verify_public_release(data: dict, directory: Path | None = None) -> None:
                     if directory and size is not None and size != (directory / name).stat().st_size:
                         raise RuntimeError(f"Anonymous download size does not match the built artifact: {name}")
                     visited.add(url)
-            print(f"Verified anonymous update feed and {len(visited)} signed artifact downloads: {endpoint}")
+            print(f"Verified anonymous GitHub update feed and {len(visited)} signed artifact downloads: {endpoint}")
             return
         except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError, KeyError, TypeError) as error:
             last_error = str(error)
             print(f"::warning::Public update health check {attempt}/{len(PUBLIC_CHECK_DELAYS)}: {last_error}")
-    fail(f"Release {data['release_tag']} is published, but its anonymous update feed could not be verified after bounded retries: {last_error}. The release was preserved; the next scheduled/manual check will retry without rebuilding.")
+    fail(f"Release {data['release_tag']} is published, but its anonymous GitHub update feed could not be verified after bounded retries: {last_error}. The release was preserved; the next scheduled/manual check will retry without rebuilding.")
 
 
 def verify_signatures(data: dict, directory: Path, names: set[str]) -> None:
@@ -564,6 +672,37 @@ def verify_signatures(data: dict, directory: Path, names: set[str]) -> None:
         signature = STATE / "verify.sig"
         signature.write_bytes(raw)
         subprocess.run(["minisign", "-Vm", str(directory / name[:-4]), "-p", str(public_key), "-x", str(signature)], check=True)
+
+
+def sign_checksums(data: dict, directory: Path) -> None:
+    """Authenticate the complete checksum list using the installed updater key."""
+    if not data["signed_updates"] or not os.environ.get("TAURI_SIGNING_PRIVATE_KEY", "").strip():
+        fail("Signing SHA256SUMS.txt requires TAURI_SIGNING_PRIVATE_KEY; unsigned checksum fallback is forbidden")
+    checksums = directory / "SHA256SUMS.txt"
+    if not checksums.is_file() or not checksums.stat().st_size:
+        fail("Cannot sign a missing or empty SHA256SUMS.txt")
+    signature = directory / "SHA256SUMS.txt.sig"
+    signature.unlink(missing_ok=True)
+    # Tauri reads the signing key and optional password from its supported env
+    # variables. Neither secret is interpolated into command arguments or logs.
+    signer_env = os.environ.copy()
+    signer_env.pop("GH_TOKEN", None)
+    signer_env.pop("GITHUB_TOKEN", None)
+    command = "npx.cmd" if os.name == "nt" else "npx"
+    try:
+        subprocess.run(
+            [command, "--yes", "--package", TAURI_SIGNER_PACKAGE, "tauri", "signer", "sign",
+             "--app-version", data["version"], str(checksums.resolve())],
+            env=signer_env, check=True, capture_output=True, text=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        fail("Tauri checksum signing failed; check the signing key/password and pinned CLI availability")
+    if not signature.is_file() or not signature.stat().st_size:
+        fail("Tauri signer did not produce SHA256SUMS.txt.sig")
+    # Do not publish merely because the signer returned success: verify against
+    # the public key embedded in clients and pre-provisioned on the mirror.
+    verify_signatures(data, directory, {"SHA256SUMS.txt.sig"})
+    print("Signed and verified SHA256SUMS.txt with this distribution's updater key")
 
 
 def publish(directory: Path) -> None:
@@ -604,8 +743,14 @@ def publish(directory: Path) -> None:
     checksums["clean-build-provenance.json"] = sha256(directory / "clean-build-provenance.json")
     (directory / "SHA256SUMS.txt").write_text("".join(f"{digest}  {name}\n" for name, digest in sorted(checksums.items())), encoding="utf-8")
     all_assets.add("SHA256SUMS.txt")
+    if data["signed_updates"]:
+        sign_checksums(data, directory)
+        all_assets.add("SHA256SUMS.txt.sig")
 
-    updater_note = "独立签名自动更新已配置；更新仅来自本仓库。" if data["signed_updates"] else "当前为手动下载安装模式：未配置独立更新签名和公开更新源，应用内自动更新暂不可用，也不会退回官方广告版。"
+    if data["signed_updates"] and data.get("download_base_url"):
+        updater_note = "独立签名自动更新已配置；客户端优先使用自有下载域名，同一仓库的 GitHub 更新源作为备用。域名通道在后续镜像任务校验并上线后生效。"
+    else:
+        updater_note = "独立签名自动更新已配置；更新仅来自本仓库。" if data["signed_updates"] else "当前为手动下载安装模式：未配置独立更新签名和公开更新源，应用内自动更新暂不可用，也不会退回官方广告版。"
     mac_note = "macOS 已使用自己的 Developer ID 签名并公证。" if notarized else "macOS 使用 ad-hoc 签名，未经过 Apple 公证；首次启动可能需要在系统隐私与安全设置中允许。"
     body = f"""## CC Switch {data['upstream_tag']} · 自有供应商版 r{data['revision']}
 
@@ -623,7 +768,7 @@ def publish(directory: Path) -> None:
 - 自动化提交：`{data['automation_sha']}`
 - 发布标签：`{data['release_tag']}`
 - 完整应用源码：`{source_name}`
-- 构建信息与文件校验：`clean-build-provenance.json`、`SHA256SUMS.txt`
+- 构建信息与文件校验：`clean-build-provenance.json`、`SHA256SUMS.txt`；签名版另含同一更新公钥可验证的 `SHA256SUMS.txt.sig`
 
 发布标签标记本次自动化配置提交。GitHub 默认的 “Source code” 附件是自动化仓库状态；与安装包对应的完整应用源码请使用上面单独附带的 `Clean-Source.tar.gz`。
 

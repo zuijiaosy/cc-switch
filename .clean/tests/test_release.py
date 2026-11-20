@@ -41,6 +41,7 @@ class ReleaseGates(unittest.TestCase):
             "TAURI_PUBLIC_KEY": "",
             "CLEAN_UPDATE_ENDPOINT": "",
             "HAS_SIGNING_KEY": "false",
+            "DOWNLOAD_BASE_URL": "",
             "GITHUB_EVENT_NAME": "workflow_dispatch",
             "GITHUB_OUTPUT": str(self.root / "outputs.txt"),
             "GITHUB_STEP_SUMMARY": str(self.root / "summary.md"),
@@ -81,7 +82,8 @@ class ReleaseGates(unittest.TestCase):
         with patch.object(release, "find_release", return_value={"draft": False}), patch.object(release, "api", return_value=self.upstream()) as api:
             with patch.object(release, "output") as output:
                 release.detect()
-                self.assertEqual(output.call_args_list, [call("build", "false"), call("state", "up_to_date")])
+                self.assertEqual(output.call_args_list, [call("build", "false"), call("state", "up_to_date"),
+                    call("release_tag", "clean-v4.0.35-r1"), call("signed_updates", "false"), call("download_enabled", "false")])
                 self.assertEqual(api.call_count, 1)
 
     def test_draft_lookup_pages_releases_then_reads_canonical_id(self):
@@ -353,7 +355,8 @@ class ReleaseGates(unittest.TestCase):
                         release.detect()
                         verify.assert_called_once()
                         resolve.assert_not_called()
-                        self.assertEqual(output.call_args_list, [call("build", "false"), call("state", "up_to_date")])
+                        self.assertEqual(output.call_args_list, [call("build", "false"), call("state", "up_to_date"),
+                            call("release_tag", "clean-v4.0.35-r2"), call("signed_updates", "true"), call("download_enabled", "false")])
 
     def test_monthly_check_only_updates_status_file_with_existing_blob_lease(self):
         last = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=31)

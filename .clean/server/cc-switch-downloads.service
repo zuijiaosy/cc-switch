@@ -1,0 +1,19 @@
+[Unit]
+Description=Verify and publish signed CC Switch download batches
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=cc-switch-publish
+Group=cc-switch-publish
+SupplementaryGroups=cc-switch-staging
+ExecStart=/usr/bin/python3 /opt/cc-switch-clean/server/publisher.py --config /etc/cc-switch-downloads/config.json --once
+UMask=0027
+TimeoutStartSec=20min
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/client-downloads/incoming/cc-switch /srv/client-downloads/incoming/receipts /srv/client-downloads/work/cc-switch /srv/client-downloads/public/cc-switch
+
