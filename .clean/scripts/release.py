@@ -96,6 +96,31 @@ def find_release(repository: str, tag: str) -> dict | None:
         page += 1
 
 
+def has_signed_release_history(repository: str) -> bool:
+    """A previous signed release or draft makes missing setup a real failure.
+
+    Read the authenticated, paginated collection, not just the current latest
+    release: latest may have been moved back to an unsigned older build. A
+    manifest or signature alone is enough evidence, including incomplete drafts.
+    API failures must propagate; they are not proof of an uninitialized channel.
+    """
+    page = 1
+    while True:
+        releases = api(f"/repos/{repository}/releases?per_page=100&page={page}")
+        if not isinstance(releases, list):
+            fail("Unexpected GitHub release collection response during setup detection")
+        for item in releases:
+            if not item.get("tag_name", "").startswith("clean-"):
+                continue
+            for asset in item.get("assets", []):
+                name = asset.get("name", "")
+                if name == "latest.json" or name.endswith(".sig"):
+                    return True
+        if len(releases) < 100:
+            return False
+        page += 1
+
+
 def output(name: str, value: str) -> None:
     if "\n" in value or "\r" in value:
         fail("Refusing a multiline workflow output")
@@ -104,6 +129,31 @@ def output(name: str, value: str) -> None:
         with open(path, "a", encoding="utf-8") as stream:
             stream.write(f"{name}={value}\n")
     print(f"{name}={value}")
+
+
+def report_setup_required(repository: str) -> None:
+    output("build", "false")
+    output("state", "setup_required")
+    print("::notice::签名更新尚未完成首次初始化，本次不构建、不发布。请在已登录 GitHub CLI 的本机运行 node .clean/scripts/setup-updates.mjs。")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as stream:
+            stream.write(f"""## 等待首次初始化
+
+签名自动更新**尚未启用**：当前没有配置更新公钥、私钥或更新端点，也没有发现带更新清单或签名附件的历史清理版（含草稿）。
+
+本次自动检查**没有构建、发布或安装新版本**，没有更改现有发行版。等待首次配置是正常等待状态，不代表更新通道已经可用。
+
+请在已登录 GitHub CLI 的本机进入本仓库目录，执行一次：
+
+```sh
+node .clean/scripts/setup-updates.mjs
+```
+
+初始化脚本会完成已授权的公开与独立签名配置并触发构建。只有构建、签名和公开下载验证全部通过，才能认定自动更新已启用。
+
+[初始化说明](https://github.com/{repository}/blob/main/.clean/README.md)
+""")
 
 
 def sha256(path: Path) -> str:
@@ -220,18 +270,23 @@ def detect() -> None:
     revision = cfg["release_revision"]
     if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
         fail("release_revision must be a positive integer")
+    public_key = os.environ.get("TAURI_PUBLIC_KEY", "").strip()
+    endpoint = os.environ.get("CLEAN_UPDATE_ENDPOINT", "").strip()
+    has_key = os.environ.get("HAS_SIGNING_KEY", "false").lower() == "true"
+    if cfg.get("require_signed_updates", False) and not (public_key and has_key):
+        untouched_setup = not public_key and not endpoint and not has_key
+        automatic_check = os.environ.get("GITHUB_EVENT_NAME") in ("schedule", "push")
+        if untouched_setup and automatic_check and not has_signed_release_history(repository):
+            report_setup_required(repository)
+            return
+        fail("This distribution requires signed automatic updates. Complete .clean/scripts/setup-updates.mjs once on the owner's authenticated computer to configure TAURI_PUBLIC_KEY and TAURI_SIGNING_PRIVATE_KEY; unsigned fallback is forbidden.")
     release = api(f"/repos/{upstream}/releases/latest")
     tag = release["tag_name"]
     if release["draft"] or release["prerelease"] or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
         fail("Only an official stable vMAJOR.MINOR.PATCH release may be built")
     clean_tag = f"clean-{tag}-r{revision}"
     existing = find_release(repository, clean_tag)
-    public_key = os.environ.get("TAURI_PUBLIC_KEY", "").strip()
-    endpoint = os.environ.get("CLEAN_UPDATE_ENDPOINT", "").strip()
-    has_key = os.environ.get("HAS_SIGNING_KEY", "false").lower() == "true"
     signed = bool(public_key or endpoint or has_key)
-    if cfg.get("require_signed_updates", False) and not (public_key and has_key):
-        fail("This distribution requires signed automatic updates. Complete .clean/scripts/setup-updates.mjs once on the owner's authenticated computer to configure TAURI_PUBLIC_KEY and TAURI_SIGNING_PRIVATE_KEY; unsigned fallback is forbidden.")
     if signed and not (public_key and has_key):
         fail("Partial updater configuration: set TAURI_PUBLIC_KEY variable and TAURI_SIGNING_PRIVATE_KEY secret together")
     expected_endpoint = f"https://github.com/{repository}/releases/latest/download/latest.json"
@@ -269,11 +324,13 @@ def detect() -> None:
             verify_public_release(data)
         print(f"Already published: {clean_tag}; update feed checked. Increment release_revision for a new clean-only build.")
         output("build", "false")
+        output("state", "up_to_date")
         return
     commit = resolve_commit(upstream, tag)
     data["upstream_sha"] = commit
     write_json(STATE / "release.json", data)
     output("build", "true")
+    output("state", "build_required")
     output("upstream_sha", commit)
     output("upstream_tag", tag)
     output("release_tag", clean_tag)

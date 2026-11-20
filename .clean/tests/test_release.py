@@ -1,8 +1,10 @@
 """Release gates: never ship a partial build or silently use the official updater."""
 
 import base64
+import contextlib
 import datetime as dt
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -26,6 +28,10 @@ class ReleaseGates(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.state = self.root / "state"
         self.state.mkdir()
+        self.log = io.StringIO()
+        capture = contextlib.redirect_stdout(self.log)
+        capture.__enter__()
+        self.addCleanup(capture.__exit__, None, None, None)
         self.state_patch = patch.object(release, "STATE", self.state)
         self.state_patch.start()
         self.environment = patch.dict(os.environ, {
@@ -35,6 +41,9 @@ class ReleaseGates(unittest.TestCase):
             "TAURI_PUBLIC_KEY": "",
             "CLEAN_UPDATE_ENDPOINT": "",
             "HAS_SIGNING_KEY": "false",
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_OUTPUT": str(self.root / "outputs.txt"),
+            "GITHUB_STEP_SUMMARY": str(self.root / "summary.md"),
         })
         self.environment.start()
         # Legacy manual-release fixtures remain useful for draft recovery gates.
@@ -72,7 +81,7 @@ class ReleaseGates(unittest.TestCase):
         with patch.object(release, "find_release", return_value={"draft": False}), patch.object(release, "api", return_value=self.upstream()) as api:
             with patch.object(release, "output") as output:
                 release.detect()
-                output.assert_called_once_with("build", "false")
+                self.assertEqual(output.call_args_list, [call("build", "false"), call("state", "up_to_date")])
                 self.assertEqual(api.call_count, 1)
 
     def test_draft_lookup_pages_releases_then_reads_canonical_id(self):
@@ -217,6 +226,79 @@ class ReleaseGates(unittest.TestCase):
                     release.detect()
                 resolve.assert_not_called()
 
+    def assert_first_setup_waits(self, event):
+        self.settings["require_signed_updates"] = True
+        history = [{"tag_name": "clean-v4.0.35-r1", "draft": False,
+                    "assets": [{"name": "clean-build-provenance.json"}, {"name": "app.msi"}]}]
+        with patch.dict(os.environ, {"GITHUB_EVENT_NAME": event}):
+            with patch.object(release, "api", return_value=history) as api, patch.object(release, "resolve_commit") as resolve:
+                with patch.object(release.subprocess, "run") as run:
+                    release.detect()
+                    api.assert_called_once_with("/repos/example/cc-switch/releases?per_page=100&page=1")
+                    resolve.assert_not_called()
+                    run.assert_not_called()
+        self.assertEqual((self.root / "outputs.txt").read_text(), "build=false\nstate=setup_required\n")
+        summary = (self.root / "summary.md").read_text()
+        self.assertIn("尚未启用", summary)
+        self.assertIn("没有构建、发布或安装新版本", summary)
+        self.assertIn("node .clean/scripts/setup-updates.mjs", summary)
+        self.assertFalse((self.state / "release.json").exists())
+
+    def test_unconfigured_first_schedule_waits_without_accessing_upstream(self):
+        self.assert_first_setup_waits("schedule")
+
+    def test_unconfigured_first_push_waits_without_accessing_upstream(self):
+        self.assert_first_setup_waits("push")
+
+    def test_unconfigured_manual_dispatch_remains_an_error(self):
+        self.settings["require_signed_updates"] = True
+        with patch.object(release, "api") as api:
+            with self.assertRaisesRegex(SystemExit, "unsigned fallback is forbidden"):
+                release.detect()
+            api.assert_not_called()
+
+    def test_partial_setup_cannot_be_reported_as_initial_wait(self):
+        self.settings["require_signed_updates"] = True
+        for provided in ({"TAURI_PUBLIC_KEY": public_key()}, {"HAS_SIGNING_KEY": "true"},
+                         {"CLEAN_UPDATE_ENDPOINT": "https://github.com/example/cc-switch/releases/latest/download/latest.json"}):
+            with self.subTest(provided=list(provided)):
+                with patch.dict(os.environ, dict(provided, GITHUB_EVENT_NAME="schedule")):
+                    with patch.object(release, "api") as api:
+                        with self.assertRaisesRegex(SystemExit, "unsigned fallback is forbidden"):
+                            release.detect()
+                        api.assert_not_called()
+
+    def test_cleared_signing_config_is_an_error_after_signed_release_or_draft(self):
+        self.settings["require_signed_updates"] = True
+        for draft in (False, True):
+            for name in ("latest.json", "app.msi.sig"):
+                with self.subTest(draft=draft, asset=name):
+                    history = [{"tag_name": "clean-v4.0.36-r2", "draft": draft, "assets": [{"name": name}]}]
+                    with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "schedule"}):
+                        with patch.object(release, "api", return_value=history):
+                            with self.assertRaisesRegex(SystemExit, "unsigned fallback is forbidden"):
+                                release.detect()
+        self.assertFalse((self.root / "outputs.txt").exists())
+
+    def test_signed_history_is_found_after_unsigned_latest_and_pagination(self):
+        first = [{"tag_name": "clean-v4.0.35-r1", "assets": []}]
+        first += [{"tag_name": f"v0.0.{i}", "assets": []} for i in range(99)]
+        second = [{"tag_name": "clean-v4.0.34-r2", "draft": True, "assets": [{"name": "latest.json"}]}]
+        with patch.object(release, "api", side_effect=[first, second]) as api:
+            self.assertTrue(release.has_signed_release_history("example/cc-switch"))
+            self.assertEqual(api.call_args_list, [
+                call("/repos/example/cc-switch/releases?per_page=100&page=1"),
+                call("/repos/example/cc-switch/releases?per_page=100&page=2"),
+            ])
+
+    def test_history_access_error_is_not_proof_of_uninitialized_setup(self):
+        self.settings["require_signed_updates"] = True
+        with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "schedule"}):
+            with patch.object(release, "api", side_effect=SystemExit("GitHub API HTTP 403")):
+                with self.assertRaisesRegex(SystemExit, "HTTP 403"):
+                    release.detect()
+        self.assertFalse((self.root / "outputs.txt").exists())
+
     def test_unsigned_r1_can_bootstrap_signed_r2_without_changing_app_version(self):
         old, new = self.data(), self.signed_data()
         with patch.object(release, "api", return_value=self.previous_release(old)), patch.object(release, "public_json", return_value=old):
@@ -271,7 +353,7 @@ class ReleaseGates(unittest.TestCase):
                         release.detect()
                         verify.assert_called_once()
                         resolve.assert_not_called()
-                        output.assert_called_once_with("build", "false")
+                        self.assertEqual(output.call_args_list, [call("build", "false"), call("state", "up_to_date")])
 
     def test_monthly_check_only_updates_status_file_with_existing_blob_lease(self):
         last = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=31)

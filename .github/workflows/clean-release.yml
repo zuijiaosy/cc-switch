@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       build: ${{ steps.detect.outputs.build }}
+      state: ${{ steps.detect.outputs.state }}
       release_tag: ${{ steps.detect.outputs.release_tag }}
       signed_updates: ${{ steps.detect.outputs.signed_updates }}
     env:
@@ -38,7 +39,7 @@ jobs:
         run: |
           python -m unittest discover -s .clean/tests -v
           node --test .clean/tests/setup-updates.test.mjs
-      - name: Resolve new official stable release
+      - name: Check setup and resolve official stable release
         id: detect
         env:
           GH_TOKEN: ${{ github.token }}
@@ -329,7 +330,7 @@ jobs:
   maintain-schedule:
     name: Record monthly upstream check
     needs: prepare
-    if: always() && github.event_name == 'schedule'
+    if: always() && github.event_name == 'schedule' && needs.prepare.outputs.state != 'setup_required'
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     permissions:

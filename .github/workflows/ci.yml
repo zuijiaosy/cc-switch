@@ -3,8 +3,16 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '.clean/**'
+      - '.github/workflows/clean-release.yml'
+      - '.github/workflows/recover-clean-release.yml'
   push:
     branches: [main]
+    paths-ignore:
+      - '.clean/**'
+      - '.github/workflows/clean-release.yml'
+      - '.github/workflows/recover-clean-release.yml'
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -60,8 +68,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Pin the compiler for the legacy source tree; validate upgrades explicitly.
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.1
         with:
           components: rustfmt, clippy
 
@@ -83,8 +92,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-1.94.1-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-1.94.1-
 
       - name: Create frontend dist placeholder
         run: mkdir -p dist
@@ -93,7 +102,7 @@ jobs:
         run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
 
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings
 
       - name: Run tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
