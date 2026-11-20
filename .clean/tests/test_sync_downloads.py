@@ -298,6 +298,12 @@ class Boundaries(unittest.TestCase):
         inbox.mkdir()
         inbox.chmod(0o2770)
         batch = "clean-v4.0.35-r2-123-1-abcd1234"
+        # Older OpenSSH versions treat the whole -D value as an executable
+        # path. A local wrapper keeps arguments out of that path on every
+        # supported runner; this is never sent to a remote SSH server.
+        server_wrapper = self.root / "sftp-server-wrapper"
+        server_wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(SFTP_SERVER) + " -u0007\n", encoding="utf-8")
+        server_wrapper.chmod(0o700)
         previous_umask = os.umask(0o077)
         try:
             sftp = sync.Sftp(self.settings, self.root / "ssh")
@@ -306,7 +312,7 @@ class Boundaries(unittest.TestCase):
                 # the chroot path into this temporary fixture; no SSH, network,
                 # production credentials, or remote shell are involved.
                 local_batch = batch_text.replace('"/cc-switch/', '"' + str(inbox) + "/")
-                return subprocess.run(["sftp", "-D", SFTP_SERVER + " -u 0007", "-b", "-"],
+                return subprocess.run(["sftp", "-D", str(server_wrapper), "-b", "-"],
                                       input=local_batch, text=True, capture_output=True, timeout=timeout, check=False)
             with patch.object(sftp, "run", side_effect=local_sftp):
                 sftp.upload(release, batch)
