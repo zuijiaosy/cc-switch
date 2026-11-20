@@ -134,7 +134,7 @@ footer p { margin: 4px 0; }
         <h3>Windows</h3>
         <ol>
           <li>普通电脑选 x64，骁龙等 ARM 设备选 ARM64。</li>
-          <li>MSI 为安装版；Portable 解压即可运行。</li>
+          <li>双击 MSI，按提示完成安装。</li>
           <li>如出现 SmartScreen 提示，点“更多信息 → 仍要运行”。</li>
         </ol>
       </div>
@@ -149,7 +149,6 @@ footer p { margin: 4px 0; }
       <div class="card">
         <h3>Linux</h3>
         <ol>
-          <li>AppImage：添加执行权限后直接运行<code class="block">chmod +x CC-Switch-*.AppImage</code></li>
           <li>Debian / Ubuntu<code class="block">sudo apt install ./CC-Switch-*.deb</code></li>
           <li>Fedora / RHEL<code class="block">sudo dnf install ./CC-Switch-*.rpm</code></li>
         </ol>
@@ -171,10 +170,11 @@ footer p { margin: 4px 0; }
   var RELEASES = "https://github.com/zuijiaosy/cc-switch/releases/latest";
   var OS_LABEL = { windows: "Windows", macos: "macOS", linux: "Linux" };
   var ARCH_LABEL = { x64: "x64", arm64: "ARM64", universal: "Apple 芯片 / Intel" };
-  var KIND_LABEL = { msi: "安装版 MSI", portable: "便携版 ZIP", dmg: "DMG 安装包", zip: "ZIP 压缩包",
-                     appimage: "AppImage", deb: "DEB（Debian / Ubuntu）", rpm: "RPM（Fedora / RHEL）" };
-  var PREFERRED = { windows: "msi", macos: "dmg", linux: "appimage" };
-  var ORDER = ["x64", "universal", "arm64", "msi", "portable", "dmg", "zip", "appimage", "deb", "rpm"];
+  var KIND_LABEL = { msi: "MSI 安装包", dmg: "DMG 安装包", deb: "DEB（Debian / Ubuntu）", rpm: "RPM（Fedora / RHEL）" };
+  // 只提供安装版：安装后才会注册网站导入配置用的 ccswitch:// 链接，便携版不具备。
+  var INSTALLERS = ["msi", "dmg", "deb", "rpm"];
+  var PREFERRED = { windows: "msi", macos: "dmg", linux: "deb" };
+  var ORDER = ["x64", "universal", "arm64", "msi", "dmg", "deb", "rpm"];
   function rank(f) { return ORDER.indexOf(f.arch) * 100 + ORDER.indexOf(f.kind); }
 
   function $(id) { return document.getElementById(id); }
@@ -223,7 +223,8 @@ footer p { margin: 4px 0; }
   }
 
   function render(manifest, client) {
-    var files = (manifest.files || []).filter(function (f) { return /^https:\/\//.test(f.url); })
+    var all = (manifest.files || []).filter(function (f) { return /^https:\/\//.test(f.url); });
+    var files = all.filter(function (f) { return INSTALLERS.indexOf(f.kind) >= 0; })
       .sort(function (a, b) { return rank(a) - rank(b); });
     if (!files.length) throw new Error("empty manifest");
     $("version").textContent = "v" + manifest.version + " · r" + manifest.revision +
@@ -264,7 +265,7 @@ footer p { margin: 4px 0; }
       grid.appendChild(card);
     });
 
-    var source = files.filter(function (f) { return f.kind === "source"; })[0];
+    var source = all.filter(function (f) { return f.kind === "source"; })[0];
     var sums = $("sums");
     files.forEach(function (f) {
       sums.appendChild(el("tr", {}, [el("td", { text: f.name }), el("td", {}, [el("code", { text: f.sha256 })])]));

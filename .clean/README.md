@@ -188,7 +188,7 @@ Windows / Linux 选择与系统及 CPU 架构对应的安装包即可；`.sig`�
 
 MinIO 侧需要：桶 `downloads`；匿名只读策略仅覆盖 `downloads/cc-switch/*` 的 `s3:GetObject`（不开放列目录）；上述专用账号。
 
-**下载站**：源码在 [`.clean/site/`](site/)，纯静态页面，部署在 Cloudflare Pages 项目 `ccswitch`，绑定域名 `ccswitch.codexzh.com`。页面在浏览器中读取上面的 `latest.json`，按访客系统推荐安装包，列出全部平台的直链和 SHA-256；读取失败时引导到 GitHub Releases。发版不需要重新部署页面，只有修改页面本身时才需要重新发布：
+**下载站**：源码在 [`.clean/site/`](site/)，纯静态页面，部署在 Cloudflare Pages 项目 `ccswitch`，绑定域名 `ccswitch.codexzh.com`。页面在浏览器中读取上面的 `latest.json`，按访客系统推荐安装包，只列出各平台的安装版（Windows MSI、macOS DMG、Linux DEB/RPM）及其 SHA-256；便携版 ZIP、macOS ZIP 和 AppImage 不在页面展示，因为网站导入配置依赖安装时注册的 `ccswitch://` 链接（文件仍随 Release 镜像，可从 GitHub 获取）。读取失败时引导到 GitHub Releases。发版不需要重新部署页面，只有修改页面本身时才需要重新发布：
 
 ```bash
 npx wrangler@4 pages deploy .clean/site --project-name ccswitch --branch main
