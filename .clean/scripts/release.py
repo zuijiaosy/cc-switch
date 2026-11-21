@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE = Path(".clean-state")
 API = "https://api.github.com"
 PLATFORMS = ("macos", "windows-x64", "windows-arm64", "linux-x64", "linux-arm64")
-PUBLIC_CHECK_DELAYS = (0, 3, 8, 15, 30, 45)
+GITHUB_PROPAGATION_DELAYS = (0, 3, 8, 15, 30, 45)
 TAURI_SIGNER_PACKAGE = "@tauri-apps/cli@2.12.4"
 
 
@@ -96,6 +96,24 @@ def find_release(repository: str, tag: str) -> dict | None:
         if len(releases) < 100:
             return None
         page += 1
+
+
+def wait_for_created_draft(repository: str, tag: str, target: str) -> dict:
+    """The release collection may lag a successful draft creation."""
+    for delay in GITHUB_PROPAGATION_DELAYS:
+        if delay:
+            time.sleep(delay)
+        draft = find_release(repository, tag)
+        if draft is None:
+            continue
+        if (
+            draft.get("draft") is not True
+            or draft.get("tag_name") != tag
+            or draft.get("target_commitish") != target
+        ):
+            fail("Created draft has unexpected provenance. Upload stopped.")
+        return draft
+    fail(f"Created draft {tag} is still not visible. Rerun the publish job to resume from the existing build artifacts.")
 
 
 def has_signed_release_history(repository: str) -> bool:
@@ -627,7 +645,7 @@ def verify_public_release(data: dict, directory: Path | None = None) -> None:
     expected_files = updater_files(data)
     local = json.loads((directory / "latest.json").read_text(encoding="utf-8")) if directory else None
     last_error = "not checked"
-    for attempt, delay in enumerate(PUBLIC_CHECK_DELAYS, 1):
+    for attempt, delay in enumerate(GITHUB_PROPAGATION_DELAYS, 1):
         if delay:
             time.sleep(delay)
         try:
@@ -652,7 +670,7 @@ def verify_public_release(data: dict, directory: Path | None = None) -> None:
             return
         except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError, KeyError, TypeError) as error:
             last_error = str(error)
-            print(f"::warning::Public update health check {attempt}/{len(PUBLIC_CHECK_DELAYS)}: {last_error}")
+            print(f"::warning::Public update health check {attempt}/{len(GITHUB_PROPAGATION_DELAYS)}: {last_error}")
     fail(f"Release {data['release_tag']} is published, but its anonymous GitHub update feed could not be verified after bounded retries: {last_error}. The release was preserved; the next scheduled/manual check will retry without rebuilding.")
 
 
@@ -787,9 +805,7 @@ def publish(directory: Path) -> None:
             fail("Existing draft targets another automation commit; increment release_revision instead of moving the tag")
     else:
         subprocess.run(["gh", "release", "create", tag, "--repo", repository, "--target", data["automation_sha"], "--draft", "--title", f"CC Switch {data['upstream_tag']} Clean r{data['revision']}", "--notes-file", str(notes)], check=True)
-        existing = find_release(repository, tag)
-        if not existing or not existing["draft"] or existing.get("target_commitish") != data["automation_sha"]:
-            fail("Created draft is missing or has unexpected provenance; refusing to upload")
+        existing = wait_for_created_draft(repository, tag, data["automation_sha"])
     release_id = existing["id"]
     subprocess.run(["gh", "release", "upload", tag, "--repo", repository, "--clobber", *[str(directory / name) for name in sorted(all_assets)]], check=True)
     uploaded = api(f"/repos/{repository}/releases/{release_id}")

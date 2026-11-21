@@ -126,6 +126,51 @@ class ReleaseGates(unittest.TestCase):
             })
         return assets, data
 
+    def test_new_draft_can_appear_after_the_first_lookup(self):
+        assets, data = self.prepared_assets()
+        draft = {"id": 123, "draft": True, "tag_name": data["release_tag"], "target_commitish": data["automation_sha"]}
+
+        def after_upload(path):
+            self.assertEqual(path, "/repos/example/cc-switch/releases/123")
+            return dict(draft, assets=[{"name": p.name, "size": p.stat().st_size}
+                                       for p in assets.iterdir() if not p.name.startswith("build-")])
+
+        with (
+            patch.object(release, "read_state", return_value=data),
+            patch.object(release, "find_release", side_effect=[None, None, draft]),
+            patch.object(release, "api", side_effect=after_upload),
+            patch.object(release.time, "sleep") as sleep,
+            patch.object(release.subprocess, "run") as run,
+        ):
+            release.publish(assets)
+        sleep.assert_called_once()
+        self.assertEqual([item.args[0][2] for item in run.call_args_list], ["create", "upload", "edit"])
+
+    def test_new_draft_still_missing_is_created_only_once_and_never_uploaded(self):
+        assets, data = self.prepared_assets()
+        with patch.object(release, "read_state", return_value=data), patch.object(release, "find_release", return_value=None):
+            with patch.object(release.time, "sleep") as sleep, patch.object(release.subprocess, "run") as run:
+                with self.assertRaisesRegex(SystemExit, "still not visible"):
+                    release.publish(assets)
+        self.assertEqual(sleep.call_args_list, [call(delay) for delay in release.GITHUB_PROPAGATION_DELAYS if delay])
+        self.assertEqual([item.args[0][2] for item in run.call_args_list], ["create"])
+
+    def test_conflicting_new_draft_stops_before_upload_without_retry(self):
+        assets, data = self.prepared_assets()
+        draft = {"id": 123, "draft": True, "tag_name": data["release_tag"], "target_commitish": data["automation_sha"]}
+        for conflict in ({"draft": False}, {"tag_name": "another-tag"}, {"target_commitish": "b" * 40}):
+            with (
+                self.subTest(conflict=conflict),
+                patch.object(release, "read_state", return_value=data),
+                patch.object(release, "find_release", side_effect=[None, dict(draft, **conflict)]),
+                patch.object(release.time, "sleep") as sleep,
+                patch.object(release.subprocess, "run") as run,
+            ):
+                with self.assertRaisesRegex(SystemExit, "unexpected provenance"):
+                    release.publish(assets)
+                sleep.assert_not_called()
+                self.assertEqual([item.args[0][2] for item in run.call_args_list], ["create"])
+
     def test_existing_draft_without_git_tag_resumes_by_target_commit(self):
         assets, data = self.prepared_assets()
         draft = {"id": 450838070, "draft": True, "tag_name": data["release_tag"], "target_commitish": data["automation_sha"]}
@@ -343,7 +388,7 @@ class ReleaseGates(unittest.TestCase):
         with patch.object(release, "public_json", return_value=manifest), patch.object(release.time, "sleep") as sleep:
             with self.assertRaisesRegex(SystemExit, "outside this release"):
                 release.verify_public_release(data)
-            self.assertEqual(sleep.call_count, len(release.PUBLIC_CHECK_DELAYS) - 1)
+            self.assertEqual(sleep.call_count, len(release.GITHUB_PROPAGATION_DELAYS) - 1)
             self.assertTrue(all(item.args[0] <= 60 for item in sleep.call_args_list))
 
     def test_already_published_signed_release_rechecks_feed_without_rebuild(self):
