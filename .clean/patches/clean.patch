@@ -74,7 +74,7 @@ index 768b66c..f4eeeb1 100644
 -            let app_type = &seed.app_type;
 -
 -            // 若该 id 已存在（极端情况：用户曾手动用过同 id），跳过
--            if self.get_provider_by_id(seed.id, app_type)?.is_some() {
+-            if self.provider_exists(seed.id, app_type)? {
 -                continue;
 -            }
 -
