@@ -1,8 +1,8 @@
 diff --git a/src-tauri/src/commands/provider.rs b/src-tauri/src/commands/provider.rs
-index 918e65b..42580f5 100644
+index 605da4c..3b2a6f8 100644
 --- a/src-tauri/src/commands/provider.rs
 +++ b/src-tauri/src/commands/provider.rs
-@@ -254,17 +254,6 @@ fn import_default_config_internal(state: &AppState, app_type: AppType) -> Result
+@@ -286,17 +286,6 @@ fn import_default_config_internal(state: &AppState, app_type: AppType) -> Result
                  return Ok(true);
              }
          }
@@ -20,7 +20,7 @@ index 918e65b..42580f5 100644
      }
  
      let imported = ProviderService::import_default_config(state, app_type.clone())?;
-@@ -359,16 +348,6 @@ fn import_claude_desktop_providers_from_claude_blocking(state: &AppState) -> Res
+@@ -395,16 +384,6 @@ fn import_claude_desktop_providers_from_claude_blocking(state: &AppState) -> Res
          imported += 1;
      }
  
@@ -38,10 +38,10 @@ index 918e65b..42580f5 100644
  }
  
 diff --git a/src-tauri/src/database/dao/providers.rs b/src-tauri/src/database/dao/providers.rs
-index 768b66c..f4eeeb1 100644
+index 4943e89..bef8428 100644
 --- a/src-tauri/src/database/dao/providers.rs
 +++ b/src-tauri/src/database/dao/providers.rs
-@@ -754,64 +754,13 @@ impl Database {
+@@ -819,64 +819,13 @@ impl Database {
          Ok(max.map(|v| (v + 1) as usize).unwrap_or(0))
      }
  
@@ -110,7 +110,7 @@ index 768b66c..f4eeeb1 100644
      }
  
      /// 按 id 兜底插入单条 official seed（仅当目标表中该 id 不存在时插入）。
-@@ -876,6 +825,41 @@ mod ensure_official_seed_tests {
+@@ -941,6 +890,41 @@ mod ensure_official_seed_tests {
          GROKBUILD_OFFICIAL_PROVIDER_ID,
      };
  
@@ -152,7 +152,7 @@ index 768b66c..f4eeeb1 100644
      #[test]
      fn ensure_inserts_when_missing() {
          let db = Database::memory().expect("memory db");
-@@ -899,7 +883,8 @@ mod ensure_official_seed_tests {
+@@ -964,7 +948,8 @@ mod ensure_official_seed_tests {
      #[test]
      fn ensure_skips_when_present_and_preserves_customization() {
          let db = Database::memory().expect("memory db");
@@ -162,7 +162,7 @@ index 768b66c..f4eeeb1 100644
  
          let mut renamed = db
              .get_provider_by_id(CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, &AppType::ClaudeDesktop)
-@@ -927,7 +912,8 @@ mod ensure_official_seed_tests {
+@@ -992,7 +977,8 @@ mod ensure_official_seed_tests {
      #[test]
      fn ensure_recreates_codex_official_seed_after_deletion() {
          let db = Database::memory().expect("memory db");
@@ -172,7 +172,7 @@ index 768b66c..f4eeeb1 100644
          db.delete_provider(&AppType::Codex, CODEX_OFFICIAL_PROVIDER_ID)
              .expect("delete Codex official");
  
-@@ -946,7 +932,8 @@ mod ensure_official_seed_tests {
+@@ -1011,7 +997,8 @@ mod ensure_official_seed_tests {
      #[test]
      fn ensure_recreates_grokbuild_official_seed_after_deletion() {
          let db = Database::memory().expect("memory db");
@@ -197,10 +197,10 @@ index b54053b..e1af7ad 100644
  //! 字段与前端预设保持一致，参见：
  //! - `src/config/claudeProviderPresets.ts`（"Claude Official"）
 diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
-index e2eead4..e9ccfdc 100644
+index 56dea01..6657226 100644
 --- a/src-tauri/src/lib.rs
 +++ b/src-tauri/src/lib.rs
-@@ -882,11 +882,8 @@ pub fn run() {
+@@ -853,11 +853,8 @@ pub fn run() {
                  Err(e) => log::warn!("✗ Failed to read skills migration flag: {e}"),
              }
  
@@ -215,10 +215,10 @@ index e2eead4..e9ccfdc 100644
              // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍 CC Switch 的工作方式。
              // 读失败时默认不弹，宁可漏弹也不要因为故障打扰用户。
 diff --git a/src-tauri/src/services/provider/live.rs b/src-tauri/src/services/provider/live.rs
-index 55bc40c..3ad1842 100644
+index 8bbd1e3..b9beaac 100644
 --- a/src-tauri/src/services/provider/live.rs
 +++ b/src-tauri/src/services/provider/live.rs
-@@ -1278,20 +1278,6 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
+@@ -1371,20 +1371,6 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
          crate::settings::set_current_provider(&app_type, Some(provider.id.as_str()))?;
      }
  
@@ -240,10 +240,10 @@ index 55bc40c..3ad1842 100644
  }
  
 diff --git a/src-tauri/src/services/provider/mod.rs b/src-tauri/src/services/provider/mod.rs
-index ab949ab..1192e73 100644
+index f19c8d0..1e0e6d5 100644
 --- a/src-tauri/src/services/provider/mod.rs
 +++ b/src-tauri/src/services/provider/mod.rs
-@@ -918,8 +918,11 @@ mod tests {
+@@ -1098,8 +1098,11 @@ mod tests {
              crate::settings::reload_settings().expect("reload settings");
              state
                  .db
@@ -359,7 +359,7 @@ index 7aabc8c..348ea66 100644
  
  common config snippet: NULL
 diff --git a/src-tauri/tests/integration/mcp_commands.rs b/src-tauri/tests/integration/mcp_commands.rs
-index 8707f97..20469ef 100644
+index 3e14e06..7957616 100644
 --- a/src-tauri/tests/integration/mcp_commands.rs
 +++ b/src-tauri/tests/integration/mcp_commands.rs
 @@ -489,7 +489,7 @@ fn import_default_config_claude_persists_provider() {
@@ -410,7 +410,7 @@ index 8707f97..20469ef 100644
      assert!(providers.get("default").is_none(), "nothing was imported");
      let current_id = state
 diff --git a/src-tauri/tests/integration/provider_commands.rs b/src-tauri/tests/integration/provider_commands.rs
-index 3cc8908..f19123c 100644
+index b7b77e6..b8d6940 100644
 --- a/src-tauri/tests/integration/provider_commands.rs
 +++ b/src-tauri/tests/integration/provider_commands.rs
 @@ -291,7 +291,7 @@ fn codex_startup_import_fresh_install_imports_once_and_syncs_current_setting() {
@@ -482,7 +482,7 @@ index 52d2929..21d1dd7 100644
        settingsConfig: "",
      },
 diff --git a/src/components/providers/forms/ProviderForm.tsx b/src/components/providers/forms/ProviderForm.tsx
-index 2296a8c..a2c36e3 100644
+index eb3478e..9656b98 100644
 --- a/src/components/providers/forms/ProviderForm.tsx
 +++ b/src/components/providers/forms/ProviderForm.tsx
 @@ -1,3 +1,4 @@
@@ -490,7 +490,7 @@ index 2296a8c..a2c36e3 100644
  import {
    useEffect,
    useMemo,
-@@ -2419,6 +2420,10 @@ function ProviderFormFull({
+@@ -2449,6 +2450,10 @@ function ProviderFormFull({
        }
  
        opencodeForm.resetOpencodeState(config);
@@ -501,7 +501,7 @@ index 2296a8c..a2c36e3 100644
  
        form.reset({
          name: preset.nameKey ? t(preset.nameKey) : preset.name,
-@@ -2445,6 +2450,10 @@ function ProviderFormFull({
+@@ -2475,6 +2480,10 @@ function ProviderFormFull({
        });
  
        openclawForm.resetOpenclawState(config);
@@ -513,7 +513,7 @@ index 2296a8c..a2c36e3 100644
        // Update form fields
        form.reset({
 diff --git a/src/components/providers/forms/ProviderPresetSelector.tsx b/src/components/providers/forms/ProviderPresetSelector.tsx
-index af5bc82..16ef858 100644
+index 574f574..0213558 100644
 --- a/src/components/providers/forms/ProviderPresetSelector.tsx
 +++ b/src/components/providers/forms/ProviderPresetSelector.tsx
 @@ -1,13 +1,13 @@
@@ -534,7 +534,7 @@ index af5bc82..16ef858 100644
  import type { CodexProviderPreset } from "@/config/codexProviderPresets";
  import type { GeminiProviderPreset } from "@/config/geminiProviderPresets";
  import type { ClaudeDesktopProviderPreset } from "@/config/claudeDesktopProviderPresets";
-@@ -38,29 +38,22 @@ import {
+@@ -39,29 +39,22 @@ import {
  } from "@/components/ui/select";
  import { ConfirmDialog } from "@/components/ConfirmDialog";
  import {
@@ -564,7 +564,7 @@ index af5bc82..16ef858 100644
    type PresetRowItem,
  } from "./presetGroups";
  
-@@ -129,8 +122,6 @@ export function getVisiblePresetRows(
+@@ -131,8 +124,6 @@ export function getVisiblePresetRows(
    return sortPresetRowsByName(found, t);
  }
  
@@ -573,7 +573,7 @@ index af5bc82..16ef858 100644
  interface ProviderPresetSelectorProps {
    selectedPresetId: string | null;
    presetEntries: PresetEntry[];
-@@ -203,6 +194,7 @@ export function ProviderPresetSelector({
+@@ -205,6 +196,7 @@ export function ProviderPresetSelector({
              onVersionChange={onPresetChange}
            />
          )}
@@ -581,7 +581,7 @@ index af5bc82..16ef858 100644
        </div>
      );
    }
-@@ -335,6 +327,7 @@ function PresetBar({
+@@ -337,6 +329,7 @@ function PresetBar({
            onVersionChange={onVersionChange}
          />
        )}
@@ -589,7 +589,7 @@ index af5bc82..16ef858 100644
      </div>
    );
  }
-@@ -554,326 +547,107 @@ function PresetPicker({
+@@ -556,326 +549,107 @@ function PresetPicker({
    onManageUniversalProviders,
  }: PresetPickerProps) {
    const { t } = useTranslation();
@@ -1007,7 +1007,7 @@ index af5bc82..16ef858 100644
  
  function PresetRow({
 diff --git a/src/components/providers/forms/hooks/useApiKeyLink.ts b/src/components/providers/forms/hooks/useApiKeyLink.ts
-index 9d98bda..3512b3a 100644
+index 22bb092..4cee503 100644
 --- a/src/components/providers/forms/hooks/useApiKeyLink.ts
 +++ b/src/components/providers/forms/hooks/useApiKeyLink.ts
 @@ -121,11 +121,10 @@ export function useApiKeyLink({
@@ -1086,7 +1086,7 @@ index 6f76dd5..1a2da5a 100644
  wire_api = "responses"
  requires_openai_auth = true`;
 diff --git a/src/config/claudeDesktopProviderPresets.ts b/src/config/claudeDesktopProviderPresets.ts
-index 2ae0dd5..961d97c 100644
+index 40cadea..9b14036 100644
 --- a/src/config/claudeDesktopProviderPresets.ts
 +++ b/src/config/claudeDesktopProviderPresets.ts
 @@ -1,3 +1,4 @@
@@ -1094,14 +1094,14 @@ index 2ae0dd5..961d97c 100644
  /**
   * Claude Desktop 预设供应商配置模板
   *
-@@ -2610,4 +2611,5 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
+@@ -2623,4 +2624,5 @@ export const claudeDesktopProviderPresets: ClaudeDesktopProviderPreset[] = [
      ),
      icon: "aicoming",
    },
 +  ...ownedClaudeDesktopPresets,
  ];
 diff --git a/src/config/claudeProviderPresets.ts b/src/config/claudeProviderPresets.ts
-index fea3b08..72bf37a 100644
+index 44163db..8ce2caf 100644
 --- a/src/config/claudeProviderPresets.ts
 +++ b/src/config/claudeProviderPresets.ts
 @@ -1,3 +1,4 @@
@@ -1109,7 +1109,7 @@ index fea3b08..72bf37a 100644
  /**
   * 预设供应商配置模板
   */
-@@ -3243,4 +3244,5 @@ export const providerPresets: ProviderPreset[] = [
+@@ -3258,4 +3259,5 @@ export const providerPresets: ProviderPreset[] = [
      icon: "genesis",
      apiFormat: "openai_chat",
    },
@@ -1117,10 +1117,10 @@ index fea3b08..72bf37a 100644
  ];
 diff --git a/src/config/cleanProviderPolicy.ts b/src/config/cleanProviderPolicy.ts
 new file mode 100644
-index 0000000..7644a0e
+index 0000000..5410eff
 --- /dev/null
 +++ b/src/config/cleanProviderPolicy.ts
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,73 @@
 +import type { AnyPreset } from "@/components/providers/forms/ProviderPresetSelector";
 +
 +/**
@@ -1143,6 +1143,8 @@ index 0000000..7644a0e
 +  "OpenAI Official",
 +  "Google Official",
 +  "Grok Official",
++  // CodeBuddy's official login preset has no providerKey.
++  "CodeBuddy Official",
 +]);
 +
 +const NATIVE_ACCOUNT_KEYS = new Set([
@@ -1193,7 +1195,7 @@ index 0000000..7644a0e
 +  return null;
 +}
 diff --git a/src/config/codexProviderPresets.ts b/src/config/codexProviderPresets.ts
-index 8c5c315..6b66f64 100644
+index 5fd6676..f884054 100644
 --- a/src/config/codexProviderPresets.ts
 +++ b/src/config/codexProviderPresets.ts
 @@ -1,3 +1,4 @@
@@ -1201,7 +1203,7 @@ index 8c5c315..6b66f64 100644
  /**
   * Codex 预设供应商配置模板
   */
-@@ -5076,4 +5077,5 @@ requires_openai_auth = true`,
+@@ -5091,4 +5092,5 @@ requires_openai_auth = true`,
        },
      ],
    },
@@ -1238,7 +1240,7 @@ index ea4860a..4f27246 100644
  export const DSH_ACCOUNT_PRESET_ID = "dsh-official-account";
  
 diff --git a/src/config/hermesProviderPresets.ts b/src/config/hermesProviderPresets.ts
-index 21d9821..904827e 100644
+index 5189f4a..aa0bd12 100644
 --- a/src/config/hermesProviderPresets.ts
 +++ b/src/config/hermesProviderPresets.ts
 @@ -1,3 +1,4 @@
@@ -1246,14 +1248,14 @@ index 21d9821..904827e 100644
  /**
   * Hermes Agent provider presets configuration
   * Hermes uses custom_providers array in config.yaml
-@@ -3578,4 +3579,5 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
+@@ -3582,4 +3583,5 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
      },
      icon: "aicoming",
    },
 +  ...ownedHermesPresets,
  ];
 diff --git a/src/config/openclawProviderPresets.ts b/src/config/openclawProviderPresets.ts
-index 27c2999..ae28394 100644
+index 854cf49..6829a95 100644
 --- a/src/config/openclawProviderPresets.ts
 +++ b/src/config/openclawProviderPresets.ts
 @@ -1,3 +1,4 @@
@@ -1261,14 +1263,14 @@ index 27c2999..ae28394 100644
  /**
   * OpenClaw provider presets configuration
   * OpenClaw uses models.providers structure with custom provider configs
-@@ -6554,4 +6555,5 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
+@@ -6601,4 +6602,5 @@ export const openclawProviderPresets: OpenClawProviderPreset[] = [
      },
      icon: "aicoming",
    },
 +  ...ownedOpenclawPresets,
  ];
 diff --git a/src/config/opencodeProviderPresets.ts b/src/config/opencodeProviderPresets.ts
-index d1aa85b..d345781 100644
+index f5020e8..fb28258 100644
 --- a/src/config/opencodeProviderPresets.ts
 +++ b/src/config/opencodeProviderPresets.ts
 @@ -1,3 +1,4 @@
@@ -1276,7 +1278,7 @@ index d1aa85b..d345781 100644
  import type { ProviderCategory, OpenCodeProviderConfig } from "../types";
  import type { PresetTheme, TemplateValueConfig } from "./claudeProviderPresets";
  import type { PresetFamilyFields } from "./presetFamilies";
-@@ -4470,4 +4471,5 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
+@@ -4513,4 +4514,5 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
      },
      icon: "aicoming",
    },
@@ -1574,7 +1576,7 @@ index 0000000..0c7197e
 +  ),
 +];
 diff --git a/src/config/universalProviderPresets.ts b/src/config/universalProviderPresets.ts
-index 0e1315d..970b3c6 100644
+index 461c855..ae6afa5 100644
 --- a/src/config/universalProviderPresets.ts
 +++ b/src/config/universalProviderPresets.ts
 @@ -59,21 +59,6 @@ const NEWAPI_DEFAULT_MODELS: UniversalProviderModels = {
@@ -1600,10 +1602,10 @@ index 0e1315d..970b3c6 100644
      name: "自定义网关",
      providerType: "custom_gateway",
 diff --git a/src/i18n/locales/en.json b/src/i18n/locales/en.json
-index 0b6e8a3..c335e21 100644
+index 2d14fe7..5808151 100644
 --- a/src/i18n/locales/en.json
 +++ b/src/i18n/locales/en.json
-@@ -2306,6 +2306,17 @@
+@@ -2342,6 +2342,17 @@
      "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
    },
    "providerPreset": {
@@ -1622,10 +1624,10 @@ index 0b6e8a3..c335e21 100644
      "custom": "Custom Configuration",
      "other": "Other",
 diff --git a/src/i18n/locales/ja.json b/src/i18n/locales/ja.json
-index b225edc..c0bdd46 100644
+index c6e1801..f73ce69 100644
 --- a/src/i18n/locales/ja.json
 +++ b/src/i18n/locales/ja.json
-@@ -2306,6 +2306,17 @@
+@@ -2342,6 +2342,17 @@
      "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
    },
    "providerPreset": {
@@ -1644,10 +1646,10 @@ index b225edc..c0bdd46 100644
      "custom": "カスタム設定",
      "other": "その他",
 diff --git a/src/i18n/locales/tr.json b/src/i18n/locales/tr.json
-index 8e41841..d5dba9e 100644
+index c9840cb..13734c8 100644
 --- a/src/i18n/locales/tr.json
 +++ b/src/i18n/locales/tr.json
-@@ -2237,6 +2237,17 @@
+@@ -2271,6 +2271,17 @@
      "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
    },
    "providerPreset": {
@@ -1666,10 +1668,10 @@ index 8e41841..d5dba9e 100644
      "custom": "Özel Yapılandırma",
      "other": "Diğer",
 diff --git a/src/i18n/locales/zh-TW.json b/src/i18n/locales/zh-TW.json
-index 87a0321..64e849d 100644
+index 9e0fc11..eb89f77 100644
 --- a/src/i18n/locales/zh-TW.json
 +++ b/src/i18n/locales/zh-TW.json
-@@ -2306,6 +2306,17 @@
+@@ -2342,6 +2342,17 @@
      "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
    },
    "providerPreset": {
@@ -1688,10 +1690,10 @@ index 87a0321..64e849d 100644
      "custom": "自訂設定",
      "other": "其他",
 diff --git a/src/i18n/locales/zh.json b/src/i18n/locales/zh.json
-index b11b3a0..a20d3ed 100644
+index c1bd28f..33069ed 100644
 --- a/src/i18n/locales/zh.json
 +++ b/src/i18n/locales/zh.json
-@@ -2306,6 +2306,17 @@
+@@ -2342,6 +2342,17 @@
      "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
    },
    "providerPreset": {
@@ -1711,10 +1713,10 @@ index b11b3a0..a20d3ed 100644
      "other": "其他",
 diff --git a/tests/components/CleanProviders.test.tsx b/tests/components/CleanProviders.test.tsx
 new file mode 100644
-index 0000000..eb890dc
+index 0000000..76e41e8
 --- /dev/null
 +++ b/tests/components/CleanProviders.test.tsx
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,276 @@
 +import { render, renderHook, screen } from "@testing-library/react";
 +import userEvent from "@testing-library/user-event";
 +import { describe, expect, it, vi } from "vitest";
@@ -1734,6 +1736,7 @@ index 0000000..eb890dc
 +import { kimiProviderPresets } from "@/config/kimiProviderPresets";
 +import { copilotProviderPresets } from "@/config/copilotProviderPresets";
 +import { workbuddyProviderPresets } from "@/config/workbuddyProviderPresets";
++import { codebuddyProviderPresets } from "@/config/codebuddyProviderPresets";
 +import { universalProviderPresets } from "@/config/universalProviderPresets";
 +import {
 +  ProviderPresetSelector,
@@ -1759,6 +1762,7 @@ index 0000000..eb890dc
 +  ["kimi", kimiProviderPresets],
 +  ["copilot", copilotProviderPresets],
 +  ["workbuddy", workbuddyProviderPresets],
++  ["codebuddy", codebuddyProviderPresets],
 +];
 +
 +const expectedServices: Record<string, string[]> = {
@@ -1812,6 +1816,29 @@ index 0000000..eb890dc
 +      expect(choose).toHaveBeenCalledWith("custom");
 +    },
 +  );
++
++  it("keeps the CodeBuddy official account login as the only connection method", () => {
++    const presets = codebuddyProviderPresets;
++    render(
++      <ProviderPresetSelector
++        selectedPresetId="custom"
++        presetEntries={presets.map((preset, index) => ({
++          id: String(index),
++          preset,
++        }))}
++        onPresetChange={vi.fn()}
++      />,
++    );
++    const official = presets.findIndex(
++      (preset) => preset.category === "official",
++    );
++    expect(official).toBeGreaterThanOrEqual(0);
++    expect(
++      screen
++        .getAllByRole("option")
++        .map((option) => option.getAttribute("value")),
++    ).toEqual(["custom", String(official)]);
++  });
 +
 +  it("keeps cross-client OAuth choices wired to their original IDs", async () => {
 +    const choose = vi.fn();

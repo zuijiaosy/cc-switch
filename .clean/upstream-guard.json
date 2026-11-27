@@ -3,6 +3,7 @@
     "agy",
     "claude",
     "claude-desktop",
+    "codebuddy",
     "codex",
     "copilot",
     "dsh",
@@ -20,6 +21,7 @@
   "preset_files": [
     "src/config/claudeDesktopProviderPresets.ts",
     "src/config/claudeProviderPresets.ts",
+    "src/config/codebuddyProviderPresets.ts",
     "src/config/codexProviderPresets.ts",
     "src/config/copilotProviderPresets.ts",
     "src/config/dshProviderPresets.ts",
@@ -37,6 +39,7 @@
   ],
   "provider_forms": [
     "src/components/providers/forms/ClaudeDesktopProviderForm.tsx",
+    "src/components/providers/forms/CodebuddyProviderForm.tsx",
     "src/components/providers/forms/CopilotProviderForm.tsx",
     "src/components/providers/forms/GrokBuildProviderForm.tsx",
     "src/components/providers/forms/KimiProviderForm.tsx",
@@ -50,6 +53,7 @@
     "src/components/providers/ProviderList.tsx": 1,
     "src/components/providers/forms/ClaudeDesktopProviderForm.tsx": 19,
     "src/components/providers/forms/ClaudeFormFields.tsx": 8,
+    "src/components/providers/forms/CodebuddyProviderForm.tsx": 7,
     "src/components/providers/forms/CodexFormFields.tsx": 8,
     "src/components/providers/forms/CopilotProviderForm.tsx": 7,
     "src/components/providers/forms/GeminiFormFields.tsx": 9,
